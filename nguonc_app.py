@@ -354,7 +354,7 @@ class NguoncApp:
 
 
 def main():
-    ft.run(target=NguoncApp().build)
+    ft.run(NguoncApp().build)
 
 
 if __name__ == "__main__":
