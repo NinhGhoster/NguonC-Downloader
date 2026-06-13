@@ -60,6 +60,18 @@ class NguoncDownloader:
             pass
         return ""
 
+    def _fetch_year_from_html(self, html: str) -> str:
+        m = re.search(r'"(?:dateCreated|datePublished|releaseDate)":"?(\d{4})', html)
+        if m:
+            return m.group(1)
+        m = re.search(r'itemprop=["\']name["\'][^>]*>(\d{4})<', html)
+        if m:
+            return m.group(1)
+        m = re.search(r'Nam[^<]*<[^>]*>[^<]*(\d{4})', html)
+        if m:
+            return m.group(1)
+        return ""
+
     def scrape(self) -> dict:
         html = _fetch(self.url)
 
@@ -77,9 +89,7 @@ class NguoncDownloader:
             self.year = self._fetch_year_from_api(slug)
 
         if not self.year:
-            m = re.search(r'"dateCreated":"([^"]+)"', html)
-            if m:
-                self.year = m.group(1)[:4]
+            self.year = self._fetch_year_from_html(html)
 
         m = re.search(r'"director":"([^"]*)"', html)
         if m:
@@ -120,7 +130,11 @@ class NguoncDownloader:
         name = self.english_title or self.title
         safe_name = re.sub(r'[\\/*?:"<>|]', "", name).strip()
         dotted = re.sub(r'\s+', '.', safe_name)
-        return f"{dotted}.S{season:02d}E{int(episode_num):02d}.mp4"
+        try:
+            ep = int(episode_num)
+        except ValueError:
+            ep = 0
+        return f"{dotted}.S{season:02d}E{ep:02d}.mp4"
 
     def resolve_all_m3u8(self, server_index: int = 0, season: int = 1) -> list[dict]:
         if not self.servers:
