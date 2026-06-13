@@ -64,7 +64,7 @@ class NguoncApp:
 
         status_bar = ft.Container(
             content=ft.Text("Ready", size=13),
-            padding=ft.padding.symmetric(6, 12),
+            padding=(6, 12),
             border_radius=6,
             bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.ON_SURFACE),
         )
