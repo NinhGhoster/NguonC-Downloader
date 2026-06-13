@@ -304,7 +304,7 @@ class NguoncApp:
                     ft.Row([subtitle_text, year_field], alignment=ft.MainAxisAlignment.START),
                 ]),
                 padding=10,
-                border=ft.border.all(1, ft.Colors.GREY_300),
+                border=ft.Border.all(1, ft.Colors.GREY_300),
                 border_radius=8,
             ),
             ft.Divider(height=10, color=ft.Colors.TRANSPARENT),
@@ -314,7 +314,7 @@ class NguoncApp:
             ft.Container(
                 content=episodes_grid,
                 height=120,
-                border=ft.border.all(1, ft.Colors.GREY_300),
+                border=ft.Border.all(1, ft.Colors.GREY_300),
                 border_radius=8,
                 padding=10,
             ),
@@ -332,7 +332,7 @@ class NguoncApp:
             ft.Container(
                 content=progress_container,
                 height=180,
-                border=ft.border.all(1, ft.Colors.GREY_300),
+                border=ft.Border.all(1, ft.Colors.GREY_300),
                 border_radius=8,
                 padding=10,
             ),
