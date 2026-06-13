@@ -38,6 +38,28 @@ class NguoncDownloader:
         self.director: str = ""
         self.servers: list[dict] = []
 
+    @staticmethod
+    def _extract_slug(url: str) -> str | None:
+        m = re.search(r'/phim/([^/]+?)(?:-\d+)?(?:\.html?)?$', url)
+        if m:
+            return m.group(1).rstrip("/")
+        return None
+
+    @staticmethod
+    def _fetch_year_from_api(slug: str) -> str:
+        try:
+            api_url = f"https://phim.nguonc.com/api/film/{slug}"
+            resp = _fetch(api_url)
+            data = json.loads(resp)
+            for cat in data.get("movie", {}).get("category", {}).values():
+                if cat.get("group", {}).get("name") == "Năm":
+                    years = [x["name"] for x in cat.get("list", [])]
+                    if years:
+                        return years[0]
+        except Exception:
+            pass
+        return ""
+
     def scrape(self) -> dict:
         html = _fetch(self.url)
 
@@ -50,9 +72,14 @@ class NguoncDownloader:
             else:
                 self.english_title = self.title
 
-        m = re.search(r'"dateCreated":"([^"]+)"', html)
-        if m:
-            self.year = m.group(1)[:4]
+        slug = self._extract_slug(self.url)
+        if slug:
+            self.year = self._fetch_year_from_api(slug)
+
+        if not self.year:
+            m = re.search(r'"dateCreated":"([^"]+)"', html)
+            if m:
+                self.year = m.group(1)[:4]
 
         m = re.search(r'"director":"([^"]*)"', html)
         if m:
@@ -89,14 +116,13 @@ class NguoncDownloader:
         base_domain = f"{parsed.scheme}://{parsed.netloc}"
         return f"{base_domain}/{sub_base64}.m3u8"
 
-    def generate_filename(self, episode_num: str) -> str:
+    def generate_filename(self, episode_num: str, season: int = 1) -> str:
         name = self.english_title or self.title
         safe_name = re.sub(r'[\\/*?:"<>|]', "", name).strip()
-        if self.year:
-            return f"{safe_name} ({self.year}) EP {episode_num}.mp4"
-        return f"{safe_name} EP {episode_num}.mp4"
+        dotted = re.sub(r'\s+', '.', safe_name)
+        return f"{dotted}.S{season:02d}E{int(episode_num):02d}.mp4"
 
-    def resolve_all_m3u8(self, server_index: int = 0) -> list[dict]:
+    def resolve_all_m3u8(self, server_index: int = 0, season: int = 1) -> list[dict]:
         if not self.servers:
             self.scrape()
         if server_index >= len(self.servers):
@@ -113,7 +139,7 @@ class NguoncDownloader:
                 "num": ep["name"],
                 "embed": ep["embed"],
                 "m3u8": m3u8_url,
-                "filename": self.generate_filename(ep["name"]),
+                "filename": self.generate_filename(ep["name"], season=season),
             })
         return results
 

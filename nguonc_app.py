@@ -57,6 +57,14 @@ class NguoncApp:
             on_change=lambda _: update_filenames(),
         )
 
+        season_field = ft.TextField(
+            label="Season",
+            width=90,
+            hint_text="1",
+            value="1",
+            on_change=lambda _: update_filenames(),
+        )
+
         server_dropdown = ft.Dropdown(
             label="Server / Source",
             width=400,
@@ -189,8 +197,9 @@ class NguoncApp:
                 return
 
             server_idx = int(server_dropdown.value)
+            season = int(season_field.value.strip() or 1)
             try:
-                self.episodes_resolved = self.downloader.resolve_all_m3u8(server_idx)
+                self.episodes_resolved = self.downloader.resolve_all_m3u8(server_idx, season=season)
             except Exception:
                 server = self.downloader.servers[server_idx]
                 self.episodes_resolved = []
@@ -199,7 +208,7 @@ class NguoncApp:
                         "num": ep["name"],
                         "embed": ep["embed"],
                         "m3u8": None,
-                        "filename": self.downloader.generate_filename(ep["name"]),
+                        "filename": self.downloader.generate_filename(ep["name"], season=season),
                     })
 
             episodes_grid.controls.clear()
@@ -215,14 +224,9 @@ class NguoncApp:
         def update_filenames():
             if not self.downloader or not self.episodes_resolved:
                 return
-            year = year_field.value.strip()
+            season = int(season_field.value.strip() or 1)
             for ep in self.episodes_resolved:
-                name = self.downloader.english_title or self.downloader.title
-                safe_name = re.sub(r'[\\/*?:"<>|]', "", name).strip()
-                if year:
-                    ep["filename"] = f"{safe_name} ({year}) EP {ep['num']}.mp4"
-                else:
-                    ep["filename"] = f"{safe_name} EP {ep['num']}.mp4"
+                ep["filename"] = self.downloader.generate_filename(ep["num"], season=season)
 
         def toggle_all(select: bool):
             for c in episodes_grid.controls:
@@ -314,7 +318,7 @@ class NguoncApp:
             ft.Container(
                 content=ft.Column([
                     title_text,
-                    ft.Row([subtitle_text, year_field], alignment=ft.MainAxisAlignment.START),
+                    ft.Row([subtitle_text, year_field, season_field], alignment=ft.MainAxisAlignment.START),
                 ]),
                 padding=10,
                 border=ft.Border.all(1, ft.Colors.GREY_300),
