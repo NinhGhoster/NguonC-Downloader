@@ -99,9 +99,7 @@ class NguoncDownloader:
         if not m:
             raise ValueError("Could not find episode data on page")
 
-        raw = m.group(1)
-        raw = re.sub(r'\\(.)', r'\1', raw)
-        self.servers = json.loads(raw)
+        self.servers = json.loads(m.group(1))
 
         return {
             "title": self.title,

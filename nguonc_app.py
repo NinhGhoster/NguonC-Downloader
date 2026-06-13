@@ -62,6 +62,17 @@ class NguoncApp:
             on_click=toggle_theme,
         )
 
+        status_bar = ft.Container(
+            content=ft.Text("Ready", size=13),
+            padding=ft.padding.symmetric(6, 12),
+            border_radius=6,
+            bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.ON_SURFACE),
+        )
+
+        def set_status(msg: str, color=None):
+            status_bar.content = ft.Text(msg, size=13, color=color)
+            page.update()
+
         url_field = ft.TextField(
             label="Movie URL",
             hint_text="https://phim.nguonc.com/phim/...",
@@ -81,15 +92,15 @@ class NguoncApp:
         year_field = ft.TextField(
             label="Year",
             width=100,
-            hint_text="2021",
+            hint_text="",
             read_only=True,
         )
 
         season_field = ft.TextField(
             label="Season",
             width=90,
-            hint_text="1",
-            value="1",
+            hint_text="",
+            value="",
             read_only=True,
         )
 
@@ -177,8 +188,6 @@ class NguoncApp:
             height=200,
         )
 
-        status_bar = ft.Text(size=12, color=ft.Colors.GREY_500)
-
         def load_movie():
             url = url_field.value.strip()
             if not url:
@@ -187,6 +196,15 @@ class NguoncApp:
 
             load_btn.disabled = True
             load_btn.text = "Loading..."
+            title_text.value = ""
+            subtitle_text.value = ""
+            year_field.value = ""
+            season_field.value = ""
+            server_dropdown.options = []
+            server_dropdown.value = None
+            download_btn.disabled = True
+            episodes_grid.controls.clear()
+            set_status("Loading... \u23f3")
             page.update()
 
             def do_load():
@@ -196,11 +214,12 @@ class NguoncApp:
                     self.downloader = d
 
                     title_text.value = info["english_title"] or info["title"]
+                    ep_count = len(info["servers"][0]["list"])
                     if info["year"]:
-                        subtitle_text.value = f"{info['year']}  |  {len(info['servers'][0]['list'])} episodes"
+                        subtitle_text.value = f"{info['year']}  |  {ep_count} episodes"
                         year_field.value = info["year"]
                     else:
-                        subtitle_text.value = f"{len(info['servers'][0]['list'])} episodes"
+                        subtitle_text.value = f"{ep_count} episodes"
 
                     server_dropdown.options = [
                         ft.dropdown.Option(str(i), s["server_name"])
@@ -210,9 +229,9 @@ class NguoncApp:
                     download_btn.disabled = False
 
                     update_episodes()
-                    snack(page, "Movie loaded successfully!")
+                    set_status(f"Loaded: {info['english_title'] or info['title']} \u2713")
                 except Exception as ex:
-                    snack(page, f"Error: {ex}")
+                    set_status(f"Error: {ex} \u274c", ft.Colors.RED)
                 finally:
                     load_btn.disabled = False
                     load_btn.text = "Load Movie"
@@ -305,7 +324,7 @@ class NguoncApp:
                     selected.append(c.data)
 
             if not selected:
-                snack(page, "No episodes selected")
+                set_status("No episodes selected")
                 self.downloading = False
                 download_btn.disabled = False
                 download_btn.text = "Download Selected"
@@ -316,6 +335,9 @@ class NguoncApp:
             output_dir = output_path_field.value.strip() or os.path.expanduser("~/Downloads")
             concurrent = int(concurrent_slider.value)
             server_name = server_dropdown.options[int(server_dropdown.value)].text if server_dropdown.value else "Unknown"
+
+            set_status("Downloading... \u23f3")
+            page.update()
 
             def do_download():
                 try:
@@ -329,9 +351,9 @@ class NguoncApp:
                         on_episode_done=on_episode_done,
                         on_progress=on_progress,
                     )
-                    status_bar.value = "Download complete!"
+                    set_status("Download complete! \u2713")
                 except Exception as ex:
-                    status_bar.value = f"Error: {ex}"
+                    set_status(f"Error: {ex} \u274c", ft.Colors.RED)
                 finally:
                     self.downloading = False
                     download_btn.disabled = False
@@ -342,7 +364,8 @@ class NguoncApp:
 
         page.add(
             ft.Row([url_field, load_btn, theme_btn], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-            ft.Divider(height=10, color=ft.Colors.TRANSPARENT),
+            status_bar,
+            ft.Divider(height=8, color=ft.Colors.TRANSPARENT),
             ft.Container(
                 content=ft.Column([
                     title_text,
@@ -381,7 +404,6 @@ class NguoncApp:
                 border_radius=8,
                 padding=10,
             ),
-            status_bar,
         )
 
 
