@@ -362,6 +362,7 @@ class NguoncApp:
 
             threading.Thread(target=do_download, daemon=True).start()
 
+        page.scroll = ft.ScrollMode.AUTO
         page.add(
             ft.Row([url_field, load_btn, theme_btn], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
             status_bar,
