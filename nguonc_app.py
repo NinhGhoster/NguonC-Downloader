@@ -1,8 +1,13 @@
 import os
 import threading
 import re
+import asyncio
 import flet as ft
 from nguonc_downloader import NguoncDownloader
+
+
+def snack(page: ft.Page, msg: str):
+    page.show_dialog(ft.SnackBar(ft.Text(msg)))
 
 
 class NguoncApp:
@@ -54,7 +59,7 @@ class NguoncApp:
         server_dropdown = ft.Dropdown(
             label="Server / Source",
             width=400,
-            on_change=lambda _: update_episodes(),
+            on_select=lambda e: update_episodes(),
         )
 
         episodes_grid = ft.GridView(
@@ -92,17 +97,18 @@ class NguoncApp:
             read_only=True,
         )
 
-        file_picker = ft.FilePicker(on_result=lambda e: set_output_dir(e))
+        file_picker = ft.FilePicker()
         page.overlay.append(file_picker)
 
-        def set_output_dir(e: ft.FilePickerResultEvent):
-            if e.path:
-                output_path_field.value = e.path
+        async def pick_directory(e):
+            path = await file_picker.get_directory_path()
+            if path:
+                output_path_field.value = path
                 output_path_field.update()
 
         output_picker = ft.IconButton(
             icon=ft.Icons.FOLDER_OPEN,
-            on_click=lambda _: file_picker.get_directory_path(),
+            on_click=pick_directory,
         )
 
         download_btn = ft.ElevatedButton(
@@ -127,9 +133,7 @@ class NguoncApp:
         def load_movie():
             url = url_field.value.strip()
             if not url:
-                page.snack_bar = ft.SnackBar(ft.Text("Please enter a URL"))
-                page.snack_bar.open = True
-                page.update()
+                snack(page, "Please enter a URL")
                 return
 
             load_btn.disabled = True
@@ -157,11 +161,9 @@ class NguoncApp:
                     download_btn.disabled = False
 
                     update_episodes()
-                    page.snack_bar = ft.SnackBar(ft.Text("Movie loaded successfully!"))
-                    page.snack_bar.open = True
+                    snack(page, "Movie loaded successfully!")
                 except Exception as ex:
-                    page.snack_bar = ft.SnackBar(ft.Text(f"Error: {ex}"))
-                    page.snack_bar.open = True
+                    snack(page, f"Error: {ex}")
                 finally:
                     load_btn.disabled = False
                     load_btn.text = "Load Movie"
@@ -221,16 +223,12 @@ class NguoncApp:
             line = ft.Text(f"EP {ep['num']}: Starting...", size=13)
             status_lines.append(line)
             progress_container.controls.append(line)
-            progress_container.scroll_to(offset=-1)
             page.update()
 
         def on_episode_done(ep: dict, success: bool):
             for line in status_lines:
                 if line.value.startswith(f"EP {ep['num']}:"):
-                    if success:
-                        icon = "✅" 
-                    else:
-                        icon = "❌" 
+                    icon = "\u2705" if success else "\u274c"
                     line.value = f"{icon} EP {ep['num']}: {'Done' if success else 'Failed'}"
                     break
             page.update()
@@ -262,8 +260,7 @@ class NguoncApp:
                     selected.append(c.data)
 
             if not selected:
-                page.snack_bar = ft.SnackBar(ft.Text("No episodes selected"))
-                page.snack_bar.open = True
+                snack(page, "No episodes selected")
                 self.downloading = False
                 download_btn.disabled = False
                 download_btn.text = "Download Selected"
