@@ -1,6 +1,6 @@
-# Nguồn Downloader
+# NguonC Downloader
 
-A cross-platform desktop app that downloads videos from **phim.nguonc.com** with maximum speed via parallel HLS fragment downloading.
+A cross-platform desktop app that downloads movies from **phim.nguonc.com** with maximum speed via parallel HLS fragment downloading.
 
 ## Features
 
