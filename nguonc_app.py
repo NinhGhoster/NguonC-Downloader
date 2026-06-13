@@ -19,8 +19,8 @@ class NguoncApp:
         self.downloading = False
 
     def build(self, page: ft.Page):
-        page.title = "Nguồn Downloader"
-        page.theme_mode = ft.ThemeMode.LIGHT
+        page.title = "NguonC Downloader"
+        page.theme_mode = ft.ThemeMode.SYSTEM
         page.window_width = 860
         page.window_height = 720
         page.window_min_width = 700
@@ -32,6 +32,34 @@ class NguoncApp:
                 primary=ft.Colors.INDIGO,
                 primary_container=ft.Colors.INDIGO_100,
             ),
+        )
+        page.dark_theme = ft.Theme(
+            color_scheme=ft.ColorScheme(
+                primary=ft.Colors.INDIGO_200,
+                primary_container=ft.Colors.INDIGO_800,
+            ),
+        )
+
+        border_color = ft.Colors.OUTLINE
+
+        def toggle_theme(e):
+            if page.theme_mode == ft.ThemeMode.SYSTEM:
+                page.theme_mode = ft.ThemeMode.DARK
+            elif page.theme_mode == ft.ThemeMode.DARK:
+                page.theme_mode = ft.ThemeMode.LIGHT
+            else:
+                page.theme_mode = ft.ThemeMode.SYSTEM
+            theme_btn.icon = {
+                ft.ThemeMode.SYSTEM: ft.Icons.BRIGHTNESS_AUTO,
+                ft.ThemeMode.DARK: ft.Icons.DARK_MODE,
+                ft.ThemeMode.LIGHT: ft.Icons.LIGHT_MODE,
+            }[page.theme_mode]
+            page.update()
+
+        theme_btn = ft.IconButton(
+            icon=ft.Icons.BRIGHTNESS_AUTO,
+            tooltip="Theme: System (click to cycle System → Dark → Light)",
+            on_click=toggle_theme,
         )
 
         url_field = ft.TextField(
@@ -54,7 +82,7 @@ class NguoncApp:
             label="Year",
             width=100,
             hint_text="2021",
-            on_change=lambda _: update_filenames(),
+            read_only=True,
         )
 
         season_field = ft.TextField(
@@ -62,7 +90,7 @@ class NguoncApp:
             width=90,
             hint_text="1",
             value="1",
-            on_change=lambda _: update_filenames(),
+            read_only=True,
         )
 
         server_dropdown = ft.Dropdown(
@@ -313,7 +341,7 @@ class NguoncApp:
             threading.Thread(target=do_download, daemon=True).start()
 
         page.add(
-            ft.Row([url_field, load_btn], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            ft.Row([url_field, load_btn, theme_btn], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
             ft.Divider(height=10, color=ft.Colors.TRANSPARENT),
             ft.Container(
                 content=ft.Column([
@@ -321,7 +349,7 @@ class NguoncApp:
                     ft.Row([subtitle_text, year_field, season_field], alignment=ft.MainAxisAlignment.START),
                 ]),
                 padding=10,
-                border=ft.Border.all(1, ft.Colors.GREY_300),
+                border=ft.Border.all(1, border_color),
                 border_radius=8,
             ),
             ft.Divider(height=10, color=ft.Colors.TRANSPARENT),
@@ -331,7 +359,7 @@ class NguoncApp:
             ft.Container(
                 content=episodes_grid,
                 height=120,
-                border=ft.Border.all(1, ft.Colors.GREY_300),
+                border=ft.Border.all(1, border_color),
                 border_radius=8,
                 padding=10,
             ),
@@ -349,7 +377,7 @@ class NguoncApp:
             ft.Container(
                 content=progress_container,
                 height=180,
-                border=ft.Border.all(1, ft.Colors.GREY_300),
+                border=ft.Border.all(1, border_color),
                 border_radius=8,
                 padding=10,
             ),
