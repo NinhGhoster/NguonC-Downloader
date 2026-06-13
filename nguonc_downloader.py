@@ -143,10 +143,12 @@ class NguoncDownloader:
         server = self.servers[server_index]
         results = []
         for ep in server["list"]:
-            try:
-                m3u8_url = self.resolve_stream_url(ep["embed"])
-            except Exception as e:
-                m3u8_url = None
+            m3u8_url = ep.get("m3u8")
+            if not m3u8_url:
+                try:
+                    m3u8_url = self.resolve_stream_url(ep["embed"])
+                except Exception:
+                    m3u8_url = None
             results.append({
                 "num": ep["name"],
                 "embed": ep["embed"],
