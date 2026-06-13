@@ -1,7 +1,8 @@
 import os
+import sys
 import threading
 import re
-import asyncio
+import subprocess
 import flet as ft
 from nguonc_downloader import NguoncDownloader
 
@@ -94,17 +95,29 @@ class NguoncApp:
             label="Output Directory",
             value=str(os.path.expanduser("~/Downloads")),
             expand=True,
-            read_only=True,
         )
 
-        file_picker = ft.FilePicker()
-        page.overlay.append(file_picker)
-
-        async def pick_directory(e):
-            path = await file_picker.get_directory_path()
-            if path:
-                output_path_field.value = path
-                output_path_field.update()
+        def pick_directory(e):
+            def _pick():
+                try:
+                    if sys.platform == "darwin":
+                        script = '''
+                        set theFolder to choose folder with prompt "Select download directory"
+                        set thePath to POSIX path of theFolder
+                        return thePath
+                        '''
+                        result = subprocess.run(
+                            ["osascript", "-e", script],
+                            capture_output=True, text=True, timeout=30
+                        )
+                        if result.returncode == 0:
+                            path = result.stdout.strip()
+                            if path:
+                                output_path_field.value = path
+                                output_path_field.update()
+                except Exception:
+                    pass
+            threading.Thread(target=_pick, daemon=True).start()
 
         output_picker = ft.IconButton(
             icon=ft.Icons.FOLDER_OPEN,
@@ -341,7 +354,7 @@ class NguoncApp:
 
 
 def main():
-    ft.app(target=NguoncApp().build)
+    ft.run(target=NguoncApp().build)
 
 
 if __name__ == "__main__":
