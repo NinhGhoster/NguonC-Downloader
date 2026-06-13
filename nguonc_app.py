@@ -64,9 +64,9 @@ class NguoncApp:
 
         status_bar = ft.Container(
             content=ft.Text("Ready", size=13),
-            padding=(6, 12),
-            border_radius=6,
-            bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.ON_SURFACE),
+            padding=ft.Padding(12, 8, 12, 8),
+            border_radius=8,
+            bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.ON_SURFACE),
         )
 
         def set_status(msg: str, color=None):
@@ -404,6 +404,7 @@ class NguoncApp:
                 border_radius=8,
                 padding=10,
             ),
+            ft.Divider(height=10, color=ft.Colors.TRANSPARENT),
         )
 
 
