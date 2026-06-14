@@ -1,7 +1,6 @@
 import re
 import json
 import base64
-import subprocess
 import urllib.request
 import urllib.error
 import os
@@ -163,36 +162,41 @@ class NguoncDownloader:
         referer: str = "",
         on_progress: Optional[Callable[[str], None]] = None,
     ) -> bool:
-        cmd = [
-            "yt-dlp",
-            "--concurrent-fragments", str(concurrent),
-            "--output", output_path,
-            "--no-part",
-            "--progress-template", "download:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s",
-            "--newline",
-        ]
+        import yt_dlp
+
+        def hook(d):
+            if on_progress:
+                status = d.get("status", "")
+                if status == "downloading":
+                    pct = d.get("_percent_str", "").strip()
+                    speed = d.get("_speed_str", "").strip()
+                    eta = d.get("_eta_str", "").strip()
+                    total = d.get("_total_bytes_str", d.get("_total_bytes_estimate_str", "?"))
+                    on_progress(f"[download] {pct} of {total} at {speed} ETA {eta}")
+                elif status == "finished":
+                    on_progress(f"[download] 100% - {d.get('_total_bytes_str', '?')} downloaded")
+                elif status == "error":
+                    on_progress(f"[download] ERROR: {d.get('error', 'Unknown error')}")
+
+        opts = {
+            "concurrent_fragments": concurrent,
+            "outtmpl": output_path,
+            "nopart": True,
+            "quiet": True,
+            "no_warnings": True,
+            "progress_hooks": [hook],
+        }
         if referer:
-            cmd += ["--referer", referer]
-        cmd.append(m3u8_url)
+            opts["http_headers"] = {"Referer": referer}
 
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-            for line in proc.stdout:
-                line = line.strip()
-                if on_progress:
-                    on_progress(line)
-            proc.wait()
-            return proc.returncode == 0
-        except FileNotFoundError:
-            raise RuntimeError(
-                "yt-dlp not found. Install it: brew install yt-dlp"
-            )
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                failed = ydl.download([m3u8_url])
+            return failed == 0
+        except Exception as e:
+            if on_progress:
+                on_progress(f"[download] ERROR: {e}")
+            return False
 
     @staticmethod
     def download_multiple(
@@ -214,7 +218,7 @@ class NguoncDownloader:
 
             if not ep["m3u8"]:
                 if on_episode_done:
-                    on_episode_done(ep, False)
+                    on_episode_done(ep, False, error="No m3u8 URL")
                 results.append({**ep, "success": False, "error": "No m3u8 URL"})
                 continue
 
@@ -246,7 +250,7 @@ class NguoncDownloader:
                 results.append({**ep, "success": ok})
             except Exception as e:
                 if on_episode_done:
-                    on_episode_done(ep, False)
+                    on_episode_done(ep, False, error=str(e))
                 results.append({**ep, "success": False, "error": str(e)})
 
         return results

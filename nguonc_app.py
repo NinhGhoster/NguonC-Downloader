@@ -96,14 +96,6 @@ class NguoncApp:
             read_only=True,
         )
 
-        season_field = ft.TextField(
-            label="Season",
-            width=90,
-            hint_text="",
-            value="",
-            read_only=True,
-        )
-
         server_dropdown = ft.Dropdown(
             label="Server / Source",
             width=400,
@@ -162,6 +154,38 @@ class NguoncApp:
                             if path:
                                 output_path_field.value = path
                                 output_path_field.update()
+                    elif sys.platform == "win32":
+                        script = '''
+                        Add-Type -AssemblyName System.Windows.Forms
+                        $f = New-Object System.Windows.Forms.FolderBrowserDialog
+                        $f.Description = "Select download directory"
+                        $f.ShowDialog() | Out-Null
+                        if ($f.SelectedPath) { Write-Output $f.SelectedPath }
+                        '''
+                        result = subprocess.run(
+                            ["powershell", "-NoProfile", "-Command", script],
+                            capture_output=True, text=True, timeout=30
+                        )
+                        if result.returncode == 0:
+                            path = result.stdout.strip()
+                            if path:
+                                output_path_field.value = path
+                                output_path_field.update()
+                    else:
+                        for cmd in [["zenity", "--file-selection", "--directory"],
+                                    ["kdialog", "--getexistingdirectory"]]:
+                            try:
+                                result = subprocess.run(
+                                    cmd, capture_output=True, text=True, timeout=30
+                                )
+                                if result.returncode == 0:
+                                    path = result.stdout.strip()
+                                    if path:
+                                        output_path_field.value = path
+                                        output_path_field.update()
+                                    break
+                            except FileNotFoundError:
+                                continue
                 except Exception:
                     pass
             threading.Thread(target=_pick, daemon=True).start()
@@ -182,10 +206,10 @@ class NguoncApp:
             on_click=lambda _: start_download(),
         )
 
-        progress_container = ft.ListView(
+        log_container = ft.ListView(
             expand=True,
-            spacing=4,
-            height=200,
+            spacing=2,
+            height=380,
         )
 
         def load_movie():
@@ -199,7 +223,6 @@ class NguoncApp:
             title_text.value = ""
             subtitle_text.value = ""
             year_field.value = ""
-            season_field.value = ""
             server_dropdown.options = []
             server_dropdown.value = None
             download_btn.disabled = True
@@ -212,9 +235,12 @@ class NguoncApp:
                     d = NguoncDownloader(url)
                     info = d.scrape()
                     self.downloader = d
-
                     title_text.value = info["english_title"] or info["title"]
-                    ep_count = len(info["servers"][0]["list"])
+
+                    servers = info.get("servers", [])
+                    if not servers:
+                        raise ValueError("No servers found for this movie")
+                    ep_count = len(servers[0].get("list", []))
                     if info["year"]:
                         subtitle_text.value = f"{info['year']}  |  {ep_count} episodes"
                         year_field.value = info["year"]
@@ -223,7 +249,7 @@ class NguoncApp:
 
                     server_dropdown.options = [
                         ft.dropdown.Option(str(i), s["server_name"])
-                        for i, s in enumerate(info["servers"])
+                        for i, s in enumerate(servers)
                     ]
                     server_dropdown.value = "0"
                     download_btn.disabled = False
@@ -244,19 +270,22 @@ class NguoncApp:
                 return
 
             server_idx = int(server_dropdown.value)
-            season = int(season_field.value.strip() or 1)
             try:
-                self.episodes_resolved = self.downloader.resolve_all_m3u8(server_idx, season=season)
-            except Exception:
-                server = self.downloader.servers[server_idx]
+                self.episodes_resolved = self.downloader.resolve_all_m3u8(server_idx, season=1)
+            except Exception as ex:
+                set_status(f"m3u8 resolution failed: {ex}", ft.Colors.RED)
                 self.episodes_resolved = []
-                for ep in server["list"]:
-                    self.episodes_resolved.append({
-                        "num": ep["name"],
-                        "embed": ep["embed"],
-                        "m3u8": None,
-                        "filename": self.downloader.generate_filename(ep["name"], season=season),
-                    })
+                try:
+                    server = self.downloader.servers[server_idx]
+                    for ep in server["list"]:
+                        self.episodes_resolved.append({
+                            "num": ep["name"],
+                            "embed": ep["embed"],
+                            "m3u8": None,
+                            "filename": self.downloader.generate_filename(ep["name"], season=1),
+                        })
+                except Exception:
+                    pass
 
             episodes_grid.controls.clear()
             for ep in self.episodes_resolved:
@@ -271,9 +300,8 @@ class NguoncApp:
         def update_filenames():
             if not self.downloader or not self.episodes_resolved:
                 return
-            season = int(season_field.value.strip() or 1)
             for ep in self.episodes_resolved:
-                ep["filename"] = self.downloader.generate_filename(ep["num"], season=season)
+                ep["filename"] = self.downloader.generate_filename(ep["num"], season=1)
 
         def toggle_all(select: bool):
             for c in episodes_grid.controls:
@@ -283,30 +311,79 @@ class NguoncApp:
 
         status_lines = []
 
-        def on_episode_start(ep: dict):
-            line = ft.Text(f"EP {ep['num']}: Starting...", size=13)
-            status_lines.append(line)
-            progress_container.controls.append(line)
-            page.update()
+        def copy_log(e):
+            lines = []
+            for c in log_container.controls:
+                if isinstance(c, ft.Text) and c.value:
+                    lines.append(c.value)
+            text = "\n".join(lines)
+            try:
+                if sys.platform == "darwin":
+                    p = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE)
+                    p.communicate(text.encode("utf-8"))
+                elif sys.platform == "win32":
+                    p = subprocess.Popen(["clip"], stdin=subprocess.PIPE)
+                    p.communicate(text.encode("utf-8"))
+                else:
+                    for cmd in [["xclip", "-selection", "clipboard"],
+                                ["xsel", "--clipboard", "--input"]]:
+                        try:
+                            p = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+                            p.communicate(text.encode("utf-8"))
+                            break
+                        except FileNotFoundError:
+                            continue
+                snack(page, "Log copied to clipboard")
+            except Exception:
+                snack(page, "Failed to copy to clipboard")
 
-        def on_episode_done(ep: dict, success: bool):
-            for line in status_lines:
-                if line.value.startswith(f"EP {ep['num']}:"):
-                    icon = "\u2705" if success else "\u274c"
-                    line.value = f"{icon} EP {ep['num']}: {'Done' if success else 'Failed'}"
-                    break
-            page.update()
+        copy_btn = ft.TextButton("Copy log", on_click=copy_log)
+        clear_btn = ft.TextButton("Clear log", on_click=lambda _: (log_container.controls.clear(), page.update()))
+
+        def log_write(msg: str, color=None, size=12):
+            try:
+                entry = ft.Text(msg, size=size, font_family="monospace", selectable=True, color=color)
+                log_container.controls.append(entry)
+                if len(log_container.controls) % 5 == 0:
+                    page.update()
+            except Exception:
+                pass
+
+        def on_episode_start(ep: dict):
+            try:
+                line = ft.Text(f"EP {ep['num']}: Starting...", size=13, font_family="monospace", selectable=True)
+                status_lines.append(line)
+                log_container.controls.append(line)
+                page.update()
+            except Exception:
+                pass
+
+        def on_episode_done(ep: dict, success: bool, error: str = ""):
+            try:
+                for line in status_lines:
+                    if line.value and line.value.startswith(f"EP {ep['num']}:"):
+                        if success:
+                            line.value = f"\u2705 EP {ep['num']}: Done"
+                        else:
+                            reason = f" ({error})" if error else ""
+                            line.value = f"\u274c EP {ep['num']}: Failed{reason}"
+                        break
+                if error:
+                    log_write(f"EP {ep['num']}: {error}", ft.Colors.RED, size=13)
+                page.update()
+            except Exception:
+                pass
 
         def on_progress(ep: dict, line: str):
-            for status_line in status_lines:
-                if status_line.value.startswith(f"EP {ep['num']}:"):
-                    if "Starting" in status_line.value or "Done" in status_line.value or "Failed" in status_line.value:
-                        pass
-                    pct_match = re.search(r'([\d.]+)%', line)
-                    if pct_match:
-                        status_line.value = f"EP {ep['num']}: {pct_match.group(1)}%"
-                    break
-            page.update()
+            try:
+                for status_line in status_lines:
+                    if status_line.value and status_line.value.startswith(f"EP {ep['num']}:"):
+                        status_line.value = f"EP {ep['num']}: {line}"
+                        break
+                color = ft.Colors.RED if "ERROR" in line.upper() else None
+                log_write(line, color)
+            except Exception:
+                pass
 
         def start_download():
             if self.downloading:
@@ -315,7 +392,7 @@ class NguoncApp:
             download_btn.disabled = True
             download_btn.text = "Downloading..."
             status_lines.clear()
-            progress_container.controls.clear()
+            log_container.controls.clear()
             page.update()
 
             selected = []
@@ -334,8 +411,10 @@ class NguoncApp:
             update_filenames()
             output_dir = output_path_field.value.strip() or os.path.expanduser("~/Downloads")
             concurrent = int(concurrent_slider.value)
-            server_name = server_dropdown.options[int(server_dropdown.value)].text if server_dropdown.value else "Unknown"
+            sv = int(server_dropdown.value) if server_dropdown.value and server_dropdown.options else 0
+            server_name = server_dropdown.options[sv].text if sv < len(server_dropdown.options) else "Unknown"
 
+            log_write(f"Episodes: {len(selected)}, Threads: {concurrent}, Output: {output_dir}", ft.Colors.GREY_400)
             set_status("Downloading... \u23f3")
             page.update()
 
@@ -370,7 +449,7 @@ class NguoncApp:
             ft.Container(
                 content=ft.Column([
                     title_text,
-                    ft.Row([subtitle_text, year_field, season_field], alignment=ft.MainAxisAlignment.START),
+                    ft.Row([subtitle_text, year_field], alignment=ft.MainAxisAlignment.START),
                 ]),
                 padding=10,
                 border=ft.Border.all(1, border_color),
@@ -397,19 +476,36 @@ class NguoncApp:
             ft.Divider(height=5, color=ft.Colors.TRANSPARENT),
             download_btn,
             ft.Divider(height=5, color=ft.Colors.TRANSPARENT),
-            ft.Text("Progress:", weight=ft.FontWeight.BOLD, size=14),
+            ft.Text("Log:", weight=ft.FontWeight.BOLD, size=14),
             ft.Container(
-                content=progress_container,
-                height=180,
+                content=log_container,
+                height=380,
                 border=ft.Border.all(1, border_color),
                 border_radius=8,
                 padding=10,
             ),
+            ft.Row([copy_btn, clear_btn], alignment=ft.MainAxisAlignment.START),
             ft.Divider(height=10, color=ft.Colors.TRANSPARENT),
         )
 
 
 def main():
+    # Patch extracted Flet.app's bundle name so macOS menu bar says "NguonC Downloader"
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        flet_plist = os.path.join(meipass, 'Flet.app', 'Contents', 'Info.plist')
+        if os.path.exists(flet_plist):
+            try:
+                subprocess.run(
+                    ['plutil', '-replace', 'CFBundleName', '-string', 'NguonC Downloader', flet_plist],
+                    capture_output=True, timeout=5,
+                )
+                subprocess.run(
+                    ['plutil', '-replace', 'CFBundleDisplayName', '-string', 'NguonC Downloader', flet_plist],
+                    capture_output=True, timeout=5,
+                )
+            except Exception:
+                pass
     ft.run(NguoncApp().build)
 
 

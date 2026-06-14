@@ -1,6 +1,6 @@
 # NguonC Downloader
 
-A cross-platform desktop app that downloads movies from **phim.nguonc.com** with maximum speed via parallel HLS fragment downloading.
+A cross-platform desktop app that downloads movies from **phim.nguonc.com** with maximum speed via parallel HLS fragment downloading. Built-in `yt-dlp` — no external tools needed.
 
 ## Features
 
@@ -8,27 +8,19 @@ A cross-platform desktop app that downloads movies from **phim.nguonc.com** with
 - **Multiple sources**: Choose between Vietsub, Thuyết minh, and other available servers
 - **Batch episodes**: Select individual episodes or ranges
 - **Maximum speed**: Downloads HLS segments in parallel (configurable up to 32 concurrent fragments)
-- **Smart naming**: Automatically names files as `{Title} ({Year}) EP {N}.mp4`
-- **Progress tracking**: Real-time per-episode progress bars
+- **Smart naming**: Automatically names files as `Name.S01E01.mp4`
 - **Cross-platform**: Works on macOS, Windows, and Linux
-
-## Prerequisites
-
-- **yt-dlp** (required for downloading):
-  - macOS: `brew install yt-dlp`
-  - Windows: `winget install yt-dlp` or `pip install yt-dlp`
-  - Linux: `sudo apt install yt-dlp` or `pip install yt-dlp`
 
 ## Installation
 
+### Pre-built binaries
+Download the latest release for your platform from the [Releases page](https://github.com/NinhGhoster/NguonC-Downloader/releases).
+
+### From source
 ```bash
-# Clone or download this repo
+git clone https://github.com/NinhGhoster/NguonC-Downloader.git
 cd nguonc-downloader
-
-# Install Python dependencies
 pip install -r requirements.txt
-
-# Run the app
 python3 nguonc_app.py
 ```
 
@@ -47,28 +39,28 @@ python3 nguonc_app.py
 
 1. **Scrape**: Fetches the movie page and extracts episode data from embedded JSON
 2. **Resolve**: For each episode, fetches the stream embed page and decodes the obfuscated HLS URL
-3. **Download**: Uses `yt-dlp --concurrent-fragments N` to download HLS segments in parallel
+3. **Download**: Uses `yt-dlp` (bundled) with `--concurrent-fragments N` to download HLS segments in parallel
 4. **Save**: Outputs original-quality MP4 files with clean naming
 
-## Building a Standalone App
+## Building
 
-### macOS (.app bundle)
+### macOS
 ```bash
-pip install pyinstaller
-flet pack nguonc_app.py --name "Nguon Downloader"
+bash build_macos.sh
 ```
-Output: `dist/Nguon Downloader.app`
+Output: `dist/NguonC Downloader.app`
 
-### Windows (.exe)
+### Windows
 ```powershell
-pip install pyinstaller
-flet pack nguonc_app.py --name "Nguon Downloader"
+pip install -r requirements.txt
+flet pack nguonc_app.py --name "NguonC Downloader"
 ```
 
-### Manual PyInstaller
+### Linux
 ```bash
-pip install pyinstaller
-pyinstaller --onefile --windowed --name "NguonDownloader" --add-data "nguonc_downloader.py:." nguonc_app.py
+pip install -r requirements.txt
+sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev xvfb
+xvfb-run flet pack nguonc_app.py --name "NguonC Downloader"
 ```
 
 ## Project Structure
@@ -78,7 +70,9 @@ nguonc-downloader/
 ├── nguonc_downloader.py    # Core engine: scrape, decode, download
 ├── nguonc_app.py           # Flet desktop GUI
 ├── requirements.txt        # Python dependencies
-├── AGENTS.md               # For AI coding assistants
+├── build_macos.sh          # macOS build script (patches Flet bundle name)
+├── .github/workflows/      # CI builds for all platforms
+├── AGENTS.md               # AI coding assistant notes
 └── README.md               # This file
 ```
 
@@ -86,7 +80,7 @@ nguonc-downloader/
 
 - **Python 3** — Core logic
 - **Flet** — Cross-platform GUI (native Flutter widgets)
-- **yt-dlp** — HLS downloading with parallel fragments
+- **yt-dlp** — HLS downloading with parallel fragments (bundled in app)
 - **PyInstaller** — App packaging
 
 ## License

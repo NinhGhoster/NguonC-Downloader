@@ -1,47 +1,35 @@
-# AGENTS.md — Nguồn Downloader
+# AGENTS.md
 
-## Project Overview
+## NguonC Downloader — Build and Release
 
-Cross-platform desktop app that downloads videos from phim.nguonc.com.
-
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| `nguonc_downloader.py` | Core engine (scrape, decode m3u8 URLs, download via yt-dlp) |
-| `nguonc_app.py` | Flet desktop GUI |
-| `requirements.txt` | Python deps (flet) |
-
-## Commands
-
+### Local Build (macOS)
 ```bash
-# Run app
-python3 nguonc_app.py
-
-# Build standalone
-flet pack nguonc_app.py --name "Nguon Downloader"
-
-# Test core module
-python3 -c "from nguonc_downloader import NguoncDownloader; d = NguoncDownloader('https://phim.nguonc.com/phim/mot-ngay-no'); print(d.scrape()['english_title'])"
+bash build_macos.sh              # Output: dist/NguonC Downloader.app
 ```
 
-## Architecture
+### CI Builds
+Pushing a tag triggers `.github/workflows/build.yml` which builds:
+- **macOS** (macos-latest): `.app` bundle via `build_macos.sh`
+- **Windows** (windows-latest): `.exe` via `flet pack`
+- **Linux** (ubuntu-latest): Linux binary via `flet pack`
 
-1. `scrape()` — fetch phim page, extract `episodes` JSON + metadata from HTML
-2. `resolve_stream_url()` — fetch embed3/embed2.streamc.xyz, decode `data-obf` base64 → find `.m3u8` URL
-3. `download_episode()` — shell out to `yt-dlp --concurrent-fragments N` with proper Referer
-4. GUI calls core in background threads (no blocking)
+### Tag format
+```
+git tag 2026.06.14
+git push origin --tags
+```
 
-## Stream URL Pattern
+This auto-creates a GitHub Release with all platform artifacts.
 
-Embed page `data-obf` → base64 decode → `{"sUb":"<b64>","hD":"<hash>"}` → stream URL = `https://{domain}/{sUb}.m3u8`
+### Key Files
+| File | Purpose |
+|------|---------|
+| `nguonc_downloader.py` | Core engine: scrape phim.nguonc.com, resolve stream URLs, download |
+| `nguonc_app.py` | Flet GUI with theme toggle, episode grid, log view |
+| `build_macos.sh` | macOS build script — patches Flet.app CFBundleName → NguonC Downloader |
+| `.github/workflows/build.yml` | CI pipeline for all 3 platforms |
 
-## Naming Convention
-
-`{English Title} ({Year}) EP {N}.mp4` — year editable in GUI
-
-## Dependencies
-
-- Runtime: `yt-dlp` (must be installed on system via brew/pip)
-- Python: `flet` (for GUI)
-- Packaging: `pyinstaller` (for standalone build)
+### Platform Quirks
+- `pbcopy` (macOS), `clip` (Windows), `xclip`/`xsel` (Linux) for clipboard
+- `osascript` (macOS), `powershell` (Windows), `zenity`/`kdialog` (Linux) for folder picker
+- `plutil` only on macOS — runtime plist patching silently skipped on other platforms
