@@ -130,6 +130,12 @@ class NguoncApp:
 
         concurrent_slider.on_change = on_concurrent_change
 
+        create_subfolder_cb = ft.Checkbox(
+            label="Create movie name subfolder",
+            value=True,
+            tooltip="Create a subfolder named after the movie title inside the output directory",
+        )
+
         output_path_field = ft.TextField(
             label="Output Directory",
             value=str(os.path.expanduser("~/Downloads")),
@@ -412,6 +418,8 @@ class NguoncApp:
             output_dir = output_path_field.value.strip() or os.path.expanduser("~/Downloads")
             concurrent = int(concurrent_slider.value)
             movie_title = (self.downloader.english_title or self.downloader.title).strip()
+            use_subfolder = create_subfolder_cb.value
+            folder_name = movie_title if use_subfolder else ""
 
             log_write(f"Episodes: {len(selected)}, Threads: {concurrent}, Output: {output_dir}", ft.Colors.GREY_400)
             set_status("Downloading... \u23f3")
@@ -422,7 +430,7 @@ class NguoncApp:
                     self.downloader.download_multiple(
                         episodes=selected,
                         output_dir=output_dir,
-                        folder_name=movie_title,
+                        folder_name=folder_name,
                         referer=self.downloader.url,
                         concurrent=concurrent,
                         on_episode_start=on_episode_start,
@@ -471,6 +479,7 @@ class NguoncApp:
                 concurrent_slider,
                 concurrent_label,
             ], alignment=ft.MainAxisAlignment.START),
+            ft.Row([create_subfolder_cb], alignment=ft.MainAxisAlignment.START),
             ft.Row([output_path_field, output_picker], alignment=ft.MainAxisAlignment.START),
             ft.Divider(height=5, color=ft.Colors.TRANSPARENT),
             download_btn,

@@ -75,13 +75,19 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: NguonC-Downloader-*
-          merge-multiple: true
-      - name: Create release
-        uses: softprops/action-gh-release@v2
+          name: NguonC-Downloader-macOS
+          path: release/macos
+      - uses: actions/download-artifact@v4
+        with:
+          name: NguonC-Downloader-Windows
+          path: release/windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: NguonC-Downloader-Linux
+          path: release/linux
+      - name: List release files
+        run: find release -type f
+      - uses: softprops/action-gh-release@v2
         with:
           name: Release ${{ github.ref_name }}
-          files: |
-            NguonC-Downloader-macOS/*
-            NguonC-Downloader-Windows/*
-            NguonC-Downloader-Linux/*
+          files: release/**/*
