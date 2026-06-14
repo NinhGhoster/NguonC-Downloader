@@ -22,7 +22,7 @@ fi
 
 echo "Building app..."
 rm -rf dist build *.spec
-PIP_REQUIRE_VIRTUALENV=0 flet pack nguonc_app.py --name "$APP_NAME"
+PIP_REQUIRE_VIRTUALENV=0 flet pack nguonc_app.py --name "$APP_NAME" --icon assets/icon.icns
 
 # Patch outer plist too
 OUTER_PLIST="dist/$APP_NAME.app/Contents/Info.plist"

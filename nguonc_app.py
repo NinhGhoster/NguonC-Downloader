@@ -8,7 +8,7 @@ from nguonc_downloader import NguoncDownloader
 
 
 def snack(page: ft.Page, msg: str):
-    page.show_dialog(ft.SnackBar(ft.Text(msg)))
+    page.show_dialog(ft.SnackBar(ft.Text(msg, selectable=True)))
 
 
 class NguoncApp:
@@ -63,14 +63,14 @@ class NguoncApp:
         )
 
         status_bar = ft.Container(
-            content=ft.Text("Ready", size=13),
+            content=ft.Text("Ready", size=13, selectable=True),
             padding=ft.Padding(12, 8, 12, 8),
             border_radius=8,
             bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.ON_SURFACE),
         )
 
         def set_status(msg: str, color=None):
-            status_bar.content = ft.Text(msg, size=13, color=color)
+            status_bar.content = ft.Text(msg, size=13, color=color, selectable=True)
             page.update()
 
         url_field = ft.TextField(
@@ -87,8 +87,8 @@ class NguoncApp:
             on_click=lambda _: load_movie(),
         )
 
-        title_text = ft.Text(size=22, weight=ft.FontWeight.BOLD)
-        subtitle_text = ft.Text(size=14, color=ft.Colors.GREY_600)
+        title_text = ft.Text(size=22, weight=ft.FontWeight.BOLD, selectable=True)
+        subtitle_text = ft.Text(size=14, color=ft.Colors.GREY_600, selectable=True)
         year_field = ft.TextField(
             label="Year",
             width=100,
@@ -122,7 +122,7 @@ class NguoncApp:
             label="{value}",
             width=300,
         )
-        concurrent_label = ft.Text("8", size=14)
+        concurrent_label = ft.Text("8", size=14, selectable=True)
 
         def on_concurrent_change(e):
             concurrent_label.value = str(int(concurrent_slider.value))
@@ -296,11 +296,11 @@ class NguoncApp:
             episodes_grid.controls.clear()
             for ep in self.episodes_resolved:
                 cb = ft.Checkbox(
-                    label=f"EP {ep['num']}",
                     value=True,
                     data=ep,
                 )
-                episodes_grid.controls.append(cb)
+                label = ft.Text(f"EP {ep['num']}", selectable=True)
+                episodes_grid.controls.append(ft.Row([cb, label]))
             episodes_grid.update()
 
         def update_filenames():
@@ -311,8 +311,8 @@ class NguoncApp:
 
         def toggle_all(select: bool):
             for c in episodes_grid.controls:
-                if isinstance(c, ft.Checkbox):
-                    c.value = select
+                if isinstance(c, ft.Row) and isinstance(c.controls[0], ft.Checkbox):
+                    c.controls[0].value = select
             episodes_grid.update()
 
         status_lines = []
@@ -403,8 +403,8 @@ class NguoncApp:
 
             selected = []
             for c in episodes_grid.controls:
-                if isinstance(c, ft.Checkbox) and c.value:
-                    selected.append(c.data)
+                if isinstance(c, ft.Row) and isinstance(c.controls[0], ft.Checkbox) and c.controls[0].value:
+                    selected.append(c.controls[0].data)
 
             if not selected:
                 set_status("No episodes selected")
@@ -475,7 +475,7 @@ class NguoncApp:
             ),
             ft.Divider(height=5, color=ft.Colors.TRANSPARENT),
             ft.Row([
-                ft.Text("Concurrent Fragments:", size=14),
+                ft.Text("Concurrent Fragments:", size=14, selectable=True),
                 concurrent_slider,
                 concurrent_label,
             ], alignment=ft.MainAxisAlignment.START),
@@ -484,7 +484,7 @@ class NguoncApp:
             ft.Divider(height=5, color=ft.Colors.TRANSPARENT),
             download_btn,
             ft.Divider(height=5, color=ft.Colors.TRANSPARENT),
-            ft.Text("Log:", weight=ft.FontWeight.BOLD, size=14),
+            ft.Text("Log:", weight=ft.FontWeight.BOLD, size=14, selectable=True),
             ft.Container(
                 content=log_container,
                 height=380,
@@ -495,8 +495,14 @@ class NguoncApp:
             ft.Row([copy_btn, clear_btn], alignment=ft.MainAxisAlignment.START),
             ft.Divider(height=10, color=ft.Colors.TRANSPARENT),
             ft.Row([
-                ft.Text("github.com/NinhGhoster/NguonC-Downloader",
-                        size=11, color=ft.Colors.GREY_500, italic=True),
+                ft.TextButton(
+                    "github.com/NinhGhoster/NguonC-Downloader",
+                    url="https://github.com/NinhGhoster/NguonC-Downloader",
+                    style=ft.ButtonStyle(
+                        color=ft.Colors.GREY_500,
+                        text_style=ft.TextStyle(size=11, italic=True),
+                    ),
+                ),
             ], alignment=ft.MainAxisAlignment.CENTER),
         )
 

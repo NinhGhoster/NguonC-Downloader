@@ -43,7 +43,7 @@ jobs:
           pip install -r requirements.txt
           pip install flet-cli pyinstaller
       - name: Build .exe
-        run: flet pack nguonc_app.py --name "NguonC Downloader"
+        run: flet pack nguonc_app.py --name "NguonC Downloader" --icon assets/icon.ico
       - uses: actions/upload-artifact@v6
         with:
           name: NguonC-Downloader-Windows
@@ -65,7 +65,7 @@ jobs:
           pip install -r requirements.txt
           pip install flet-cli pyinstaller
       - name: Build
-        run: xvfb-run flet pack nguonc_app.py --name "NguonC Downloader"
+        run: xvfb-run flet pack nguonc_app.py --name "NguonC Downloader" --icon assets/icon.png
       - name: Rename for release
         run: mv "dist/NguonC Downloader" "dist/NguonC Downloader.bin"
       - uses: actions/upload-artifact@v6

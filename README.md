@@ -1,5 +1,7 @@
 # NguonC Downloader
 
+> **Disclaimer**: This project is for **educational and research purposes only**. It is intended to demonstrate technical concepts in web scraping, HLS video downloading, and cross-platform desktop application development. Users are responsible for complying with applicable laws and terms of service.
+
 A cross-platform desktop app that downloads movies from **phim.nguonc.com** with maximum speed via parallel HLS fragment downloading. Built-in `yt-dlp` — no external tools needed.
 
 ## Features
@@ -35,6 +37,8 @@ python3 nguonc_app.py
 7. Choose an **output directory**
 8. Click **Download Selected**
 
+![Screenshot](assets/screenshot.png)
+
 ## How It Works
 
 1. **Scrape**: Fetches the movie page and extracts episode data from embedded JSON
@@ -67,6 +71,11 @@ xvfb-run flet pack nguonc_app.py --name "NguonC Downloader"
 
 ```
 nguonc-downloader/
+├── assets/                  # Icons, screenshots
+│   ├── icon.png
+│   ├── icon.icns
+│   ├── icon.ico
+│   └── screenshot.png
 ├── nguonc_downloader.py    # Core engine: scrape, decode, download
 ├── nguonc_app.py           # Flet desktop GUI
 ├── requirements.txt        # Python dependencies

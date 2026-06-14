@@ -1,6 +1,7 @@
 import re
 import json
 import base64
+import ssl
 import urllib.request
 import urllib.error
 import os
@@ -18,12 +19,15 @@ USER_AGENT = (
 
 
 def _fetch(url: str, referer: str = "") -> str:
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
     req = urllib.request.Request(url, headers={
         "User-Agent": USER_AGENT,
     })
     if referer:
         req.add_header("Referer", referer)
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
         return resp.read().decode("utf-8", errors="replace")
 
 
