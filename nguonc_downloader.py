@@ -202,7 +202,7 @@ class NguoncDownloader:
     def download_multiple(
         episodes: list[dict],
         output_dir: str,
-        server_name: str,
+        folder_name: str,
         referer: str,
         concurrent: int = 8,
         on_episode_start: Optional[Callable[[dict], None]] = None,
@@ -222,7 +222,7 @@ class NguoncDownloader:
                 results.append({**ep, "success": False, "error": "No m3u8 URL"})
                 continue
 
-            safe_name = re.sub(r'[\\/*?:"<>|]', "", server_name).strip()
+            safe_name = re.sub(r'[\\/*?:"<>|]', "", folder_name).strip()
             episode_dir = os.path.join(output_dir, safe_name)
             os.makedirs(episode_dir, exist_ok=True)
             output_path = os.path.join(episode_dir, ep["filename"])

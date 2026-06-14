@@ -411,8 +411,7 @@ class NguoncApp:
             update_filenames()
             output_dir = output_path_field.value.strip() or os.path.expanduser("~/Downloads")
             concurrent = int(concurrent_slider.value)
-            sv = int(server_dropdown.value) if server_dropdown.value and server_dropdown.options else 0
-            server_name = server_dropdown.options[sv].text if sv < len(server_dropdown.options) else "Unknown"
+            movie_title = (self.downloader.english_title or self.downloader.title).strip()
 
             log_write(f"Episodes: {len(selected)}, Threads: {concurrent}, Output: {output_dir}", ft.Colors.GREY_400)
             set_status("Downloading... \u23f3")
@@ -423,7 +422,7 @@ class NguoncApp:
                     self.downloader.download_multiple(
                         episodes=selected,
                         output_dir=output_dir,
-                        server_name=server_name,
+                        folder_name=movie_title,
                         referer=self.downloader.url,
                         concurrent=concurrent,
                         on_episode_start=on_episode_start,
