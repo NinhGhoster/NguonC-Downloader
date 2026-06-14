@@ -7,12 +7,15 @@ on:
   pull_request:
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install dependencies
@@ -21,7 +24,7 @@ jobs:
           pip install flet-cli pyinstaller
       - name: Build .app bundle
         run: bash build_macos.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: NguonC-Downloader-macOS
           path: dist/NguonC Downloader.app
@@ -29,8 +32,8 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install dependencies
@@ -39,7 +42,7 @@ jobs:
           pip install flet-cli pyinstaller
       - name: Build .exe
         run: flet pack nguonc_app.py --name "NguonC Downloader"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: NguonC-Downloader-Windows
           path: dist/
@@ -47,8 +50,8 @@ jobs:
   build-linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install system dependencies
@@ -61,7 +64,7 @@ jobs:
           pip install flet-cli pyinstaller
       - name: Build
         run: xvfb-run flet pack nguonc_app.py --name "NguonC Downloader"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: NguonC-Downloader-Linux
           path: dist/
@@ -73,21 +76,21 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: NguonC-Downloader-macOS
           path: release/macos
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: NguonC-Downloader-Windows
           path: release/windows
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: NguonC-Downloader-Linux
           path: release/linux
       - name: List release files
         run: find release -type f
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           name: Release ${{ github.ref_name }}
-          files: release/**/*
+          files: release/**
