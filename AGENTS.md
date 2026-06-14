@@ -1,35 +1,58 @@
-# AGENTS.md
+# AGENTS.md — NguonC Downloader
 
-## NguonC Downloader — Build and Release
+## Entrypoints
 
-### Local Build (macOS)
+- `nguonc_app.py` — Flet GUI (run directly: `python3 nguonc_app.py`)
+- `nguonc_downloader.py` — core engine (scrape → resolve `data-obf` m3u8 → `yt_dlp` download)
+
+## Running
+
 ```bash
-bash build_macos.sh              # Output: dist/NguonC Downloader.app
+pip install -r requirements.txt
+python3 nguonc_app.py
 ```
 
-### CI Builds
-Pushing a tag triggers `.github/workflows/build.yml` which builds:
-- **macOS** (macos-latest): `.app` bundle via `build_macos.sh`
-- **Windows** (windows-latest): `.exe` via `flet pack`
-- **Linux** (ubuntu-latest): Linux binary via `flet pack`
+No external yt-dlp needed — uses bundled `yt_dlp` Python library.
 
-### Tag format
-```
-git tag 2026.06.14
-git push origin --tags
-```
+## Building
 
-This auto-creates a GitHub Release with all platform artifacts.
+| Platform | Command | Output |
+|----------|---------|--------|
+| macOS | `bash build_macos.sh` | `dist/NguonC Downloader.app` (then CI wraps in .dmg) |
+| Windows | `flet pack nguonc_app.py --name "NguonC Downloader" --icon assets/icon.ico` | `.exe` |
+| Linux | `xvfb-run flet pack nguonc_app.py --name "NguonC Downloader" --icon assets/icon.png` | `.bin` |
 
-### Key Files
-| File | Purpose |
-|------|---------|
-| `nguonc_downloader.py` | Core engine: scrape phim.nguonc.com, resolve stream URLs, download |
-| `nguonc_app.py` | Flet GUI with theme toggle, episode grid, log view |
-| `build_macos.sh` | macOS build script — patches Flet.app CFBundleName → NguonC Downloader |
-| `.github/workflows/build.yml` | CI pipeline for all 3 platforms |
+macOS: `build_macos.sh` patches Flet.app `CFBundleName` in cache before build, restores after. Runtime also patches via `sys._MEIPASS`. Run it on macOS only.
 
-### Platform Quirks
-- `pbcopy` (macOS), `clip` (Windows), `xclip`/`xsel` (Linux) for clipboard
-- `osascript` (macOS), `powershell` (Windows), `zenity`/`kdialog` (Linux) for folder picker
-- `plutil` only on macOS — runtime plist patching silently skipped on other platforms
+## Flet 0.85.3 quirks
+
+- `page.clipboard` is **read-only** — use `pbcopy`/`clip`/`xclip` subprocess instead
+- `page.scroll = ft.ScrollMode.AUTO` (not `ADAPTIVE`)
+- No `ft.padding.symmetric()` — use `ft.Padding(...)` tuple
+- `ft.SnackBar` shown via `page.show_dialog(SnackBar(...))`, not `page.snack_bar =`
+- `ft.Border.all(...)` not `ft.border.all(...)`
+- `ft.run(func)` — pass function reference, not instance
+
+## Architecture
+
+`_fetch()` in `nguonc_downloader.py` disables SSL verification (phim.nguonc.com has misconfigured certs).
+
+m3u8 resolution: embed page → `data-obf` → base64 decode → `{"sUb":"<b64>","hD":"<hash>"}` → `domain/{sub}.m3u8`. Referer header must be the embed URL (CDN requires it).
+
+Episode checkboxes in `GridView` are wrapped as `ft.Row([ft.Checkbox(data=ep), ft.Text(..., selectable=True)])`. Access checkbox via `controls[0]`.
+
+## CI & Releases
+
+Triggered on tag push (`*`), PR, or manual. Workflow in `.github/workflows/build.yml`. Tag format: `YYYY.MM.DD` (force push to update).
+
+Release assets per platform:
+
+| Platform | File |
+|----------|------|
+| macOS | `NguonC Downloader.dmg` |
+| Windows | `NguonC Downloader.exe` |
+| Linux | `NguonC Downloader.bin` |
+
+## Icon assets
+
+`assets/icon.png` — source. Convert to `icon.icns` (macOS) and `icon.ico` (Windows) using `sips` + `iconutil` or Python struct packing. Each platform `flet pack --icon` uses its own format.
