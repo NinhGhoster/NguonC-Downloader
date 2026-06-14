@@ -494,6 +494,10 @@ class NguoncApp:
             ),
             ft.Row([copy_btn, clear_btn], alignment=ft.MainAxisAlignment.START),
             ft.Divider(height=10, color=ft.Colors.TRANSPARENT),
+            ft.Row([
+                ft.Text("github.com/NinhGhoster/NguonC-Downloader",
+                        size=11, color=ft.Colors.GREY_500, italic=True),
+            ], alignment=ft.MainAxisAlignment.CENTER),
         )
 
 

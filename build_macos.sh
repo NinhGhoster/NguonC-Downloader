@@ -2,6 +2,9 @@
 set -e
 cd "$(dirname "$0")"
 
+# Add Python user-installed binaries to PATH (for flet)
+export PATH="$(python3 -c 'import site; print(site.USER_BASE)')/bin:$PATH"
+
 APP_NAME="NguonC Downloader"
 FLET_CACHE="$HOME/.flet/client/flet-desktop-full-0.85.3"
 FLET_APP="$FLET_CACHE/Flet.app"

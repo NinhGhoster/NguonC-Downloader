@@ -24,12 +24,12 @@ jobs:
           pip install flet-cli pyinstaller
       - name: Build .app bundle
         run: bash build_macos.sh
-      - name: Package .app
-        run: ditto -c -k --sequesterRsrc --keepParent "dist/NguonC Downloader.app" "dist/NguonC Downloader.app.zip"
+      - name: Create .dmg
+        run: hdiutil create -volname "NguonC Downloader" -srcfolder "dist/NguonC Downloader.app" -ov -format UDZO "dist/NguonC Downloader.dmg"
       - uses: actions/upload-artifact@v6
         with:
           name: NguonC-Downloader-macOS
-          path: dist/NguonC Downloader.app.zip
+          path: dist/NguonC Downloader.dmg
 
   build-windows:
     runs-on: windows-latest
@@ -66,10 +66,12 @@ jobs:
           pip install flet-cli pyinstaller
       - name: Build
         run: xvfb-run flet pack nguonc_app.py --name "NguonC Downloader"
+      - name: Rename for release
+        run: mv "dist/NguonC Downloader" "dist/NguonC Downloader.bin"
       - uses: actions/upload-artifact@v6
         with:
           name: NguonC-Downloader-Linux
-          path: dist/NguonC Downloader
+          path: dist/NguonC Downloader.bin
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
