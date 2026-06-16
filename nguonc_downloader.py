@@ -7,6 +7,9 @@ import urllib.error
 import os
 import urllib.parse
 import threading
+import tempfile
+import hmac
+import hashlib
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Callable
@@ -112,6 +115,37 @@ class NguoncDownloader:
             "servers": self.servers,
         }
 
+    @staticmethod
+    def _decrypt_m3u8(encrypted_content: str, video_hash: str) -> str:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+        lines = encrypted_content.strip().split("\n")
+
+        iv_hex = None
+        data_line = None
+        for line in lines:
+            if "#ENC-AESGCM" in line:
+                m = re.search(r"iv=([0-9a-fA-F]+)", line)
+                if m:
+                    iv_hex = m.group(1)
+            elif not line.startswith("#") and line.strip():
+                data_line = line.strip()
+
+        if not iv_hex or not data_line:
+            raise ValueError("Could not parse encrypted m3u8")
+
+        key = hmac.new(
+            b"stream-derive-v1",
+            video_hash.encode("utf-8"),
+            hashlib.sha256,
+        ).digest()
+
+        iv = bytes.fromhex(iv_hex)
+        ciphertext = base64.b64decode(data_line)
+
+        plaintext = AESGCM(key).decrypt(iv, ciphertext, None)
+        return plaintext.decode("utf-8")
+
     def resolve_stream_url(self, embed_url: str) -> str:
         html = _fetch(embed_url, referer=self.url)
 
@@ -147,9 +181,28 @@ class NguoncDownloader:
         results = []
         for ep in server["list"]:
             try:
-                m3u8_url = self.resolve_stream_url(ep["embed"])
+                encrypted_url = self.resolve_stream_url(ep["embed"])
+                encrypted = _fetch(encrypted_url, referer=ep["embed"])
+                if "#ENC-AESGCM" in encrypted:
+                    html = _fetch(ep["embed"], referer=self.url)
+                    obf_m = re.search(r'data-obf="([^"]+)"', html)
+                    video_hash = ""
+                    if obf_m:
+                        data_obf = obf_m.group(1)
+                        stream_data = json.loads(base64.b64decode(data_obf).decode())
+                        video_hash = stream_data.get("hD", "")
+                    decrypted = self._decrypt_m3u8(encrypted, video_hash)
+                    tmp = tempfile.NamedTemporaryFile(
+                        mode="w", suffix=".m3u8", delete=False
+                    )
+                    tmp.write(decrypted)
+                    tmp.close()
+                    m3u8_url = tmp.name
+                else:
+                    m3u8_url = encrypted_url
             except Exception:
                 m3u8_url = None
+
             results.append({
                 "num": ep["name"],
                 "embed": ep["embed"],
@@ -185,7 +238,6 @@ class NguoncDownloader:
         opts = {
             "concurrent_fragments": concurrent,
             "outtmpl": output_path,
-            "nopart": True,
             "quiet": True,
             "no_warnings": True,
             "progress_hooks": [hook],
@@ -193,9 +245,16 @@ class NguoncDownloader:
         if referer:
             opts["http_headers"] = {"Referer": referer}
 
+        is_local = not m3u8_url.startswith("http://") and not m3u8_url.startswith("https://")
+        if is_local:
+            opts["enable_file_urls"] = True
+            url = Path(m3u8_url).resolve().as_uri()
+        else:
+            url = m3u8_url
+
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
-                failed = ydl.download([m3u8_url])
+                failed = ydl.download([url])
             return failed == 0
         except Exception as e:
             if on_progress:
