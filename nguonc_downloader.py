@@ -10,6 +10,7 @@ import threading
 import tempfile
 import hmac
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Callable
@@ -101,7 +102,9 @@ class NguoncDownloader:
         if m:
             self.director = m.group(1)
 
-        m = re.search(r'var episodes\s*=\s*(\[.*?\]);', html, re.DOTALL)
+        m = re.search(r'id="nc-episode-data">(\[.*?\])</', html, re.DOTALL)
+        if not m:
+            m = re.search(r'var episodes\s*=\s*(\[.*?\]);', html, re.DOTALL)
         if not m:
             raise ValueError("Could not find episode data on page")
 
@@ -161,6 +164,40 @@ class NguoncDownloader:
         base_domain = f"{parsed.scheme}://{parsed.netloc}"
         return f"{base_domain}/{sub_base64}.m3u8"
 
+    def _resolve_one(self, ep: dict, season: int = 1) -> dict:
+        embed_html = _fetch(ep["embed"], referer=self.url)
+
+        obf_m = re.search(r'data-obf="([^"]+)"', embed_html)
+        if not obf_m:
+            raise ValueError(f"Could not find data-obf in {ep['embed']}")
+
+        stream_data = json.loads(base64.b64decode(obf_m.group(1)).decode())
+        sub_base64 = stream_data["sUb"]
+        video_hash = stream_data.get("hD", "")
+
+        parsed = urllib.parse.urlparse(ep["embed"])
+        base_domain = f"{parsed.scheme}://{parsed.netloc}"
+        encrypted_url = f"{base_domain}/{sub_base64}.m3u8"
+
+        encrypted = _fetch(encrypted_url, referer=ep["embed"])
+        if "#ENC-AESGCM" in encrypted:
+            decrypted = self._decrypt_m3u8(encrypted, video_hash)
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".m3u8", delete=False
+            )
+            tmp.write(decrypted)
+            tmp.close()
+            m3u8_url = tmp.name
+        else:
+            m3u8_url = encrypted_url
+
+        return {
+            "num": ep["name"],
+            "embed": ep["embed"],
+            "m3u8": m3u8_url,
+            "filename": self.generate_filename(ep["name"], season=season),
+        }
+
     def generate_filename(self, episode_num: str, season: int = 1) -> str:
         name = self.english_title or self.title
         safe_name = re.sub(r'[\\/*?:"<>|]', "", name).strip()
@@ -171,51 +208,41 @@ class NguoncDownloader:
             ep = 0
         return f"{dotted}.S{season:02d}E{ep:02d}.mp4"
 
-    def resolve_all_m3u8(self, server_index: int = 0, season: int = 1) -> list[dict]:
+    def resolve_all_m3u8(
+        self,
+        server_index: int = 0,
+        season: int = 1,
+        workers: int = 8,
+    ) -> list[dict]:
         if not self.servers:
             self.scrape()
         if server_index >= len(self.servers):
             raise ValueError(f"Server index {server_index} out of range")
 
         server = self.servers[server_index]
-        results = []
-        for ep in server["list"]:
-            try:
-                encrypted_url = self.resolve_stream_url(ep["embed"])
-                encrypted = _fetch(encrypted_url, referer=ep["embed"])
-                if "#ENC-AESGCM" in encrypted:
-                    html = _fetch(ep["embed"], referer=self.url)
-                    obf_m = re.search(r'data-obf="([^"]+)"', html)
-                    video_hash = ""
-                    if obf_m:
-                        data_obf = obf_m.group(1)
-                        stream_data = json.loads(base64.b64decode(data_obf).decode())
-                        video_hash = stream_data.get("hD", "")
-                    decrypted = self._decrypt_m3u8(encrypted, video_hash)
-                    tmp = tempfile.NamedTemporaryFile(
-                        mode="w", suffix=".m3u8", delete=False
-                    )
-                    tmp.write(decrypted)
-                    tmp.close()
-                    m3u8_url = tmp.name
-                else:
-                    m3u8_url = encrypted_url
-            except Exception:
-                m3u8_url = None
+        episodes = server["list"]
 
-            results.append({
-                "num": ep["name"],
-                "embed": ep["embed"],
-                "m3u8": m3u8_url,
-                "filename": self.generate_filename(ep["name"], season=season),
-            })
-        return results
+        def resolve_one(ep: dict) -> dict:
+            try:
+                return self._resolve_one(ep, season=season)
+            except Exception:
+                return {
+                    "num": ep["name"],
+                    "embed": ep["embed"],
+                    "m3u8": None,
+                    "filename": self.generate_filename(ep["name"], season=season),
+                }
+
+        if len(episodes) <= 1:
+            return [resolve_one(ep) for ep in episodes]
+
+        with ThreadPoolExecutor(max_workers=min(workers, len(episodes))) as pool:
+            return list(pool.map(resolve_one, episodes))
 
     @staticmethod
     def download_episode(
         m3u8_url: str,
         output_path: str,
-        concurrent: int = 8,
         referer: str = "",
         on_progress: Optional[Callable[[str], None]] = None,
     ) -> bool:
@@ -236,7 +263,6 @@ class NguoncDownloader:
                     on_progress(f"[download] ERROR: {d.get('error', 'Unknown error')}")
 
         opts = {
-            "concurrent_fragments": concurrent,
             "outtmpl": output_path,
             "quiet": True,
             "no_warnings": True,
@@ -267,34 +293,31 @@ class NguoncDownloader:
         output_dir: str,
         folder_name: str,
         referer: str,
-        concurrent: int = 8,
+        parallel: int = 1,
         on_episode_start: Optional[Callable[[dict], None]] = None,
         on_episode_done: Optional[Callable[[dict, bool], None]] = None,
         on_progress: Optional[Callable[[dict, str], None]] = None,
     ) -> list[dict]:
         os.makedirs(output_dir, exist_ok=True)
-        results = []
+        safe_name = re.sub(r'[\\/*?:"<>|]', "", folder_name).strip()
+        episode_dir = os.path.join(output_dir, safe_name)
+        os.makedirs(episode_dir, exist_ok=True)
 
-        for ep in episodes:
+        def download_one(ep: dict) -> dict:
             if on_episode_start:
                 on_episode_start(ep)
 
             if not ep["m3u8"]:
                 if on_episode_done:
                     on_episode_done(ep, False, error="No m3u8 URL")
-                results.append({**ep, "success": False, "error": "No m3u8 URL"})
-                continue
+                return {**ep, "success": False, "error": "No m3u8 URL"}
 
-            safe_name = re.sub(r'[\\/*?:"<>|]', "", folder_name).strip()
-            episode_dir = os.path.join(output_dir, safe_name)
-            os.makedirs(episode_dir, exist_ok=True)
             output_path = os.path.join(episode_dir, ep["filename"])
 
             if os.path.exists(output_path):
                 if on_episode_done:
                     on_episode_done(ep, True)
-                results.append({**ep, "success": True, "skipped": True})
-                continue
+                return {**ep, "success": True, "skipped": True}
 
             def _on_progress(line: str):
                 if on_progress:
@@ -304,16 +327,19 @@ class NguoncDownloader:
                 ok = NguoncDownloader.download_episode(
                     m3u8_url=ep["m3u8"],
                     output_path=output_path,
-                    concurrent=concurrent,
                     referer=ep["embed"],
                     on_progress=_on_progress,
                 )
                 if on_episode_done:
                     on_episode_done(ep, ok)
-                results.append({**ep, "success": ok})
+                return {**ep, "success": ok}
             except Exception as e:
                 if on_episode_done:
                     on_episode_done(ep, False, error=str(e))
-                results.append({**ep, "success": False, "error": str(e)})
+                return {**ep, "success": False, "error": str(e)}
 
-        return results
+        if len(episodes) <= 1 or parallel <= 1:
+            return [download_one(ep) for ep in episodes]
+
+        with ThreadPoolExecutor(max_workers=min(parallel, len(episodes))) as pool:
+            return list(pool.map(download_one, episodes))

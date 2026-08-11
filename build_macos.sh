@@ -2,9 +2,6 @@
 set -e
 cd "$(dirname "$0")"
 
-# Add Python user-installed binaries to PATH (for flet)
-export PATH="$(python3 -c 'import site; print(site.USER_BASE)')/bin:$PATH"
-
 APP_NAME="NguonC Downloader"
 FLET_CACHE="$HOME/.flet/client/flet-desktop-full-0.85.3"
 FLET_APP="$FLET_CACHE/Flet.app"
@@ -22,7 +19,7 @@ fi
 
 echo "Building app..."
 rm -rf dist build *.spec
-PIP_REQUIRE_VIRTUALENV=0 flet pack nguonc_app.py --name "$APP_NAME" --icon assets/icon.icns
+uv run flet pack nguonc_app.py --name "$APP_NAME" --icon assets/icon.icns
 
 # Patch outer plist too
 OUTER_PLIST="dist/$APP_NAME.app/Contents/Info.plist"

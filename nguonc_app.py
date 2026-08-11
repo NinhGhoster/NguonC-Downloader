@@ -1,8 +1,10 @@
+import asyncio
 import os
 import sys
 import threading
 import re
 import subprocess
+import time
 import flet as ft
 from nguonc_downloader import NguoncDownloader
 
@@ -17,6 +19,7 @@ class NguoncApp:
         self.downloader: NguoncDownloader | None = None
         self.episodes_resolved: list[dict] = []
         self.downloading = False
+        self._resolve_seq = 0
 
     def build(self, page: ft.Page):
         page.title = "NguonC Downloader"
@@ -39,6 +42,18 @@ class NguoncApp:
                 primary_container=ft.Colors.INDIGO_800,
             ),
         )
+
+        # Flet 0.86 has no main-thread marshaling API; worker threads must
+        # not touch controls directly (races with flet's own patch/diff on
+        # lifecycle events -> IndexError in ObjectPatch). Route all UI work
+        # through this helper onto the app's asyncio loop thread.
+        loop = asyncio.get_running_loop()
+
+        def ui(fn):
+            try:
+                loop.call_soon_threadsafe(fn)
+            except Exception:
+                pass
 
         border_color = ft.Colors.OUTLINE
 
@@ -81,7 +96,7 @@ class NguoncApp:
             on_submit=lambda _: load_movie(),
         )
 
-        load_btn = ft.ElevatedButton(
+        load_btn = ft.Button(
             "Load Movie",
             icon=ft.Icons.SEARCH,
             on_click=lambda _: load_movie(),
@@ -116,19 +131,37 @@ class NguoncApp:
 
         concurrent_slider = ft.Slider(
             min=1,
-            max=32,
-            value=8,
-            divisions=31,
+            max=8,
+            value=1,
+            divisions=7,
             label="{value}",
             width=300,
+            disabled=True,
         )
-        concurrent_label = ft.Text("8", size=14, selectable=True)
+        concurrent_label = ft.Text("1", size=14, selectable=True)
 
         def on_concurrent_change(e):
             concurrent_label.value = str(int(concurrent_slider.value))
             concurrent_label.update()
 
         concurrent_slider.on_change = on_concurrent_change
+
+        def refresh_concurrency_state():
+            count = 0
+            for c in episodes_grid.controls:
+                if (
+                    isinstance(c, ft.Row)
+                    and c.controls
+                    and isinstance(c.controls[0], ft.Checkbox)
+                    and c.controls[0].value
+                ):
+                    count += 1
+            enabled = count >= 2
+            concurrent_slider.disabled = not enabled
+            if not enabled and int(concurrent_slider.value) > 1:
+                concurrent_slider.value = 1
+                concurrent_label.value = "1"
+            page.update()
 
         create_subfolder_cb = ft.Checkbox(
             label="Create movie name subfolder",
@@ -143,6 +176,10 @@ class NguoncApp:
         )
 
         def pick_directory(e):
+            def set_path(path: str):
+                ui(lambda: setattr(output_path_field, "value", path))
+                ui(lambda: output_path_field.update())
+
             def _pick():
                 try:
                     if sys.platform == "darwin":
@@ -158,8 +195,7 @@ class NguoncApp:
                         if result.returncode == 0:
                             path = result.stdout.strip()
                             if path:
-                                output_path_field.value = path
-                                output_path_field.update()
+                                set_path(path)
                     elif sys.platform == "win32":
                         script = '''
                         Add-Type -AssemblyName System.Windows.Forms
@@ -175,8 +211,7 @@ class NguoncApp:
                         if result.returncode == 0:
                             path = result.stdout.strip()
                             if path:
-                                output_path_field.value = path
-                                output_path_field.update()
+                                set_path(path)
                     else:
                         for cmd in [["zenity", "--file-selection", "--directory"],
                                     ["kdialog", "--getexistingdirectory"]]:
@@ -187,8 +222,7 @@ class NguoncApp:
                                 if result.returncode == 0:
                                     path = result.stdout.strip()
                                     if path:
-                                        output_path_field.value = path
-                                        output_path_field.update()
+                                        set_path(path)
                                     break
                             except FileNotFoundError:
                                 continue
@@ -201,7 +235,7 @@ class NguoncApp:
             on_click=pick_directory,
         )
 
-        download_btn = ft.ElevatedButton(
+        download_btn = ft.Button(
             "Download Selected",
             icon=ft.Icons.DOWNLOAD,
             disabled=True,
@@ -212,10 +246,19 @@ class NguoncApp:
             on_click=lambda _: start_download(),
         )
 
-        log_container = ft.ListView(
+        terminal_view = ft.ListView(
             expand=True,
             spacing=2,
             height=380,
+        )
+        terminal_view.controls.append(
+            ft.Text(
+                "$ NguonC Downloader - ready",
+                size=13,
+                font_family="monospace",
+                color=ft.Colors.GREY_400,
+                selectable=True,
+            )
         )
 
         def load_movie():
@@ -240,34 +283,44 @@ class NguoncApp:
                 try:
                     d = NguoncDownloader(url)
                     info = d.scrape()
-                    self.downloader = d
-                    title_text.value = info["english_title"] or info["title"]
 
-                    servers = info.get("servers", [])
-                    if not servers:
-                        raise ValueError("No servers found for this movie")
-                    ep_count = len(servers[0].get("list", []))
-                    if info["year"]:
-                        subtitle_text.value = f"{info['year']}  |  {ep_count} episodes"
-                        year_field.value = info["year"]
-                    else:
-                        subtitle_text.value = f"{ep_count} episodes"
+                    def apply():
+                        self.downloader = d
+                        title_text.value = info["english_title"] or info["title"]
 
-                    server_dropdown.options = [
-                        ft.dropdown.Option(str(i), s["server_name"])
-                        for i, s in enumerate(servers)
-                    ]
-                    server_dropdown.value = "0"
-                    download_btn.disabled = False
+                        servers = info.get("servers", [])
+                        if not servers:
+                            set_status("Error: No servers found for this movie \u274c", ft.Colors.RED)
+                            return
+                        ep_count = len(servers[0].get("list", []))
+                        if info["year"]:
+                            subtitle_text.value = f"{info['year']}  |  {ep_count} episodes"
+                            year_field.value = info["year"]
+                        else:
+                            subtitle_text.value = f"{ep_count} episodes"
 
-                    update_episodes()
-                    set_status(f"Loaded: {info['english_title'] or info['title']} \u2713")
+                        server_dropdown.options = [
+                            ft.dropdown.Option(
+                                str(i),
+                                s.get("server_name") or s.get("name") or f"Server {i + 1}",
+                            )
+                            for i, s in enumerate(servers)
+                        ]
+                        server_dropdown.value = "0"
+                        download_btn.disabled = False
+
+                        update_episodes()
+                        set_status(f"Loaded: {info['english_title'] or info['title']} \u2713")
+
+                    ui(apply)
                 except Exception as ex:
-                    set_status(f"Error: {ex} \u274c", ft.Colors.RED)
+                    ui(lambda: set_status(f"Error: {ex} \u274c", ft.Colors.RED))
                 finally:
-                    load_btn.disabled = False
-                    load_btn.text = "Load Movie"
-                    page.update()
+                    def restore():
+                        load_btn.disabled = False
+                        load_btn.text = "Load Movie"
+                        page.update()
+                    ui(restore)
 
             threading.Thread(target=do_load, daemon=True).start()
 
@@ -276,32 +329,50 @@ class NguoncApp:
                 return
 
             server_idx = int(server_dropdown.value)
-            try:
-                self.episodes_resolved = self.downloader.resolve_all_m3u8(server_idx, season=1)
-            except Exception as ex:
-                set_status(f"m3u8 resolution failed: {ex}", ft.Colors.RED)
-                self.episodes_resolved = []
+            seq = self._resolve_seq = self._resolve_seq + 1
+            set_status("Resolving episode streams... \u23f3")
+            episodes_grid.controls.clear()
+            page.update()
+
+            def do_resolve():
                 try:
-                    server = self.downloader.servers[server_idx]
-                    for ep in server["list"]:
-                        self.episodes_resolved.append({
+                    resolved = self.downloader.resolve_all_m3u8(server_idx, season=1)
+                except Exception as ex:
+                    ui(lambda: set_status(f"m3u8 resolution failed: {ex}", ft.Colors.RED))
+                    resolved = []
+
+                if seq != getattr(self, "_resolve_seq", 0):
+                    return
+
+                self.episodes_resolved = resolved
+                if not resolved:
+                    try:
+                        server = self.downloader.servers[server_idx]
+                        self.episodes_resolved = [{
                             "num": ep["name"],
                             "embed": ep["embed"],
                             "m3u8": None,
                             "filename": self.downloader.generate_filename(ep["name"], season=1),
-                        })
-                except Exception:
-                    pass
+                        } for ep in server["list"]]
+                    except Exception:
+                        pass
 
-            episodes_grid.controls.clear()
-            for ep in self.episodes_resolved:
-                cb = ft.Checkbox(
-                    value=True,
-                    data=ep,
-                )
-                label = ft.Text(f"EP {ep['num']}", selectable=True)
-                episodes_grid.controls.append(ft.Row([cb, label]))
-            episodes_grid.update()
+                def apply():
+                    episodes_grid.controls.clear()
+                    for ep in self.episodes_resolved:
+                        cb = ft.Checkbox(
+                            value=True,
+                            data=ep,
+                            on_change=lambda _: refresh_concurrency_state(),
+                        )
+                        label = ft.Text(f"EP {ep['num']}", selectable=True)
+                        episodes_grid.controls.append(ft.Row([cb, label]))
+                    episodes_grid.update()
+                    refresh_concurrency_state()
+
+                ui(apply)
+
+            threading.Thread(target=do_resolve, daemon=True).start()
 
         def update_filenames():
             if not self.downloader or not self.episodes_resolved:
@@ -313,83 +384,59 @@ class NguoncApp:
             for c in episodes_grid.controls:
                 if isinstance(c, ft.Row) and isinstance(c.controls[0], ft.Checkbox):
                     c.controls[0].value = select
-            episodes_grid.update()
+            refresh_concurrency_state()
 
-        status_lines = []
+        status_lines: dict[str, ft.Text] = {}
+        last_progress_tick: dict[str, float] = {}
 
-        def copy_log(e):
-            lines = []
-            for c in log_container.controls:
-                if isinstance(c, ft.Text) and c.value:
-                    lines.append(c.value)
-            text = "\n".join(lines)
-            try:
-                if sys.platform == "darwin":
-                    p = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE)
-                    p.communicate(text.encode("utf-8"))
-                elif sys.platform == "win32":
-                    p = subprocess.Popen(["clip"], stdin=subprocess.PIPE)
-                    p.communicate(text.encode("utf-8"))
-                else:
-                    for cmd in [["xclip", "-selection", "clipboard"],
-                                ["xsel", "--clipboard", "--input"]]:
-                        try:
-                            p = subprocess.Popen(cmd, stdin=subprocess.PIPE)
-                            p.communicate(text.encode("utf-8"))
-                            break
-                        except FileNotFoundError:
-                            continue
-                snack(page, "Log copied to clipboard")
-            except Exception:
-                snack(page, "Failed to copy to clipboard")
-
-        copy_btn = ft.TextButton("Copy log", on_click=copy_log)
-        clear_btn = ft.TextButton("Clear log", on_click=lambda _: (log_container.controls.clear(), page.update()))
-
-        def log_write(msg: str, color=None, size=12):
-            try:
-                entry = ft.Text(msg, size=size, font_family="monospace", selectable=True, color=color)
-                log_container.controls.append(entry)
-                if len(log_container.controls) % 5 == 0:
-                    page.update()
-            except Exception:
-                pass
+        def add_terminal_line(text: str, color=None) -> ft.Text:
+            line = ft.Text(
+                text,
+                size=13,
+                font_family="monospace",
+                selectable=True,
+                color=color,
+            )
+            terminal_view.controls.append(line)
+            if len(terminal_view.controls) > 100:
+                del terminal_view.controls[: len(terminal_view.controls) - 100]
+            return line
 
         def on_episode_start(ep: dict):
-            try:
-                line = ft.Text(f"EP {ep['num']}: Starting...", size=13, font_family="monospace", selectable=True)
-                status_lines.append(line)
-                log_container.controls.append(line)
+            def apply():
+                line = add_terminal_line(f"$ EP {ep['num']}: Starting...", ft.Colors.GREY_400)
+                status_lines[ep["num"]] = line
                 page.update()
-            except Exception:
-                pass
+            ui(apply)
 
         def on_episode_done(ep: dict, success: bool, error: str = ""):
-            try:
-                for line in status_lines:
-                    if line.value and line.value.startswith(f"EP {ep['num']}:"):
-                        if success:
-                            line.value = f"\u2705 EP {ep['num']}: Done"
-                        else:
-                            reason = f" ({error})" if error else ""
-                            line.value = f"\u274c EP {ep['num']}: Failed{reason}"
-                        break
+            def apply():
+                line = status_lines.get(ep["num"])
+                if line is not None:
+                    if success:
+                        line.value = f"\u2705 EP {ep['num']}: Done"
+                        line.color = None
+                    else:
+                        reason = f" ({error})" if error else ""
+                        line.value = f"\u274c EP {ep['num']}: Failed{reason}"
+                        line.color = ft.Colors.RED
                 if error:
-                    log_write(f"EP {ep['num']}: {error}", ft.Colors.RED, size=13)
+                    add_terminal_line(f"> EP {ep['num']}: {error}", ft.Colors.RED)
                 page.update()
-            except Exception:
-                pass
+            ui(apply)
 
         def on_progress(ep: dict, line: str):
-            try:
-                for status_line in status_lines:
-                    if status_line.value and status_line.value.startswith(f"EP {ep['num']}:"):
-                        status_line.value = f"EP {ep['num']}: {line}"
-                        break
-                color = ft.Colors.RED if "ERROR" in line.upper() else None
-                log_write(line, color)
-            except Exception:
-                pass
+            now = time.monotonic()
+            if now - last_progress_tick.get(ep["num"], 0.0) < 0.3:
+                return
+            last_progress_tick[ep["num"]] = now
+
+            def apply():
+                status_line = status_lines.get(ep["num"])
+                if status_line is not None:
+                    status_line.value = f"> EP {ep['num']}: {line}"
+                    status_line.update()
+            ui(apply)
 
         def start_download():
             if self.downloading:
@@ -398,7 +445,8 @@ class NguoncApp:
             download_btn.disabled = True
             download_btn.text = "Downloading..."
             status_lines.clear()
-            log_container.controls.clear()
+            last_progress_tick.clear()
+            terminal_view.controls.clear()
             page.update()
 
             selected = []
@@ -416,12 +464,15 @@ class NguoncApp:
 
             update_filenames()
             output_dir = output_path_field.value.strip() or os.path.expanduser("~/Downloads")
-            concurrent = int(concurrent_slider.value)
+            parallel = int(concurrent_slider.value)
             movie_title = (self.downloader.english_title or self.downloader.title).strip()
             use_subfolder = create_subfolder_cb.value
             folder_name = movie_title if use_subfolder else ""
 
-            log_write(f"Episodes: {len(selected)}, Threads: {concurrent}, Output: {output_dir}", ft.Colors.GREY_400)
+            add_terminal_line(
+                f"$ Episodes: {len(selected)}, Parallel: {parallel}, Output: {output_dir}",
+                ft.Colors.GREY_400,
+            )
             set_status("Downloading... \u23f3")
             page.update()
 
@@ -432,19 +483,21 @@ class NguoncApp:
                         output_dir=output_dir,
                         folder_name=folder_name,
                         referer=self.downloader.url,
-                        concurrent=concurrent,
+                        parallel=parallel,
                         on_episode_start=on_episode_start,
                         on_episode_done=on_episode_done,
                         on_progress=on_progress,
                     )
-                    set_status("Download complete! \u2713")
+                    ui(lambda: set_status("Download complete! \u2713"))
                 except Exception as ex:
-                    set_status(f"Error: {ex} \u274c", ft.Colors.RED)
+                    ui(lambda: set_status(f"Error: {ex} \u274c", ft.Colors.RED))
                 finally:
-                    self.downloading = False
-                    download_btn.disabled = False
-                    download_btn.text = "Download Selected"
-                    page.update()
+                    def restore():
+                        self.downloading = False
+                        download_btn.disabled = False
+                        download_btn.text = "Download Selected"
+                        page.update()
+                    ui(restore)
 
             threading.Thread(target=do_download, daemon=True).start()
 
@@ -475,7 +528,7 @@ class NguoncApp:
             ),
             ft.Divider(height=5, color=ft.Colors.TRANSPARENT),
             ft.Row([
-                ft.Text("Concurrent Fragments:", size=14, selectable=True),
+                ft.Text("Concurrent Episodes:", size=14, selectable=True),
                 concurrent_slider,
                 concurrent_label,
             ], alignment=ft.MainAxisAlignment.START),
@@ -484,15 +537,15 @@ class NguoncApp:
             ft.Divider(height=5, color=ft.Colors.TRANSPARENT),
             download_btn,
             ft.Divider(height=5, color=ft.Colors.TRANSPARENT),
-            ft.Text("Log:", weight=ft.FontWeight.BOLD, size=14, selectable=True),
+            ft.Text("Terminal:", weight=ft.FontWeight.BOLD, size=14, selectable=True),
             ft.Container(
-                content=log_container,
+                content=terminal_view,
                 height=380,
                 border=ft.Border.all(1, border_color),
                 border_radius=8,
                 padding=10,
+                bgcolor=ft.Colors.BLACK,
             ),
-            ft.Row([copy_btn, clear_btn], alignment=ft.MainAxisAlignment.START),
             ft.Divider(height=10, color=ft.Colors.TRANSPARENT),
             ft.Row([
                 ft.TextButton(

@@ -1,0 +1,17 @@
+[project]
+name = "nguonc-downloader"
+version = "0.1.0"
+description = "Cross-platform desktop app that downloads movies from phim.nguonc.com"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "flet>=0.25.0",
+    "yt-dlp",
+    "cryptography",
+]
+
+[dependency-groups]
+dev = [
+    "flet-cli",
+    "pyinstaller",
+]

@@ -1,5 +1,0 @@
-flet>=0.25.0
-yt-dlp
-flet-cli
-pyinstaller
-cryptography
