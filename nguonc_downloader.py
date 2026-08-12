@@ -21,18 +21,38 @@ USER_AGENT = (
     "Chrome/120.0.0.0 Safari/537.36"
 )
 
+# Hosts with broken TLS certs. All requests are verified by default; only
+# hosts listed here fall back to an unverified connection.
+INSECURE_HOSTS: set[str] = set()
 
-def _fetch(url: str, referer: str = "") -> str:
+_SECURE_CTX = ssl.create_default_context()
+
+
+def _insecure_context() -> ssl.SSLContext:
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+def _fetch(url: str, referer: str = "") -> str:
+    host = (urllib.parse.urlparse(url).hostname or "").lower()
     req = urllib.request.Request(url, headers={
         "User-Agent": USER_AGENT,
     })
     if referer:
         req.add_header("Referer", referer)
-    with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
-        return resp.read().decode("utf-8", errors="replace")
+    try:
+        with urllib.request.urlopen(req, timeout=30, context=_SECURE_CTX) as resp:
+            return resp.read().decode("utf-8", errors="replace")
+    except urllib.error.URLError as e:
+        if (
+            host in INSECURE_HOSTS
+            and isinstance(e.reason, ssl.SSLCertVerificationError)
+        ):
+            with urllib.request.urlopen(req, timeout=30, context=_insecure_context()) as resp:
+                return resp.read().decode("utf-8", errors="replace")
+        raise
 
 
 class NguoncDownloader:
@@ -295,7 +315,7 @@ class NguoncDownloader:
         referer: str,
         parallel: int = 1,
         on_episode_start: Optional[Callable[[dict], None]] = None,
-        on_episode_done: Optional[Callable[[dict, bool], None]] = None,
+        on_episode_done: Optional[Callable[[dict, bool, str], None]] = None,
         on_progress: Optional[Callable[[dict, str], None]] = None,
     ) -> list[dict]:
         os.makedirs(output_dir, exist_ok=True)
@@ -309,7 +329,7 @@ class NguoncDownloader:
 
             if not ep["m3u8"]:
                 if on_episode_done:
-                    on_episode_done(ep, False, error="No m3u8 URL")
+                    on_episode_done(ep, False, "No m3u8 URL")
                 return {**ep, "success": False, "error": "No m3u8 URL"}
 
             output_path = os.path.join(episode_dir, ep["filename"])
@@ -335,7 +355,7 @@ class NguoncDownloader:
                 return {**ep, "success": ok}
             except Exception as e:
                 if on_episode_done:
-                    on_episode_done(ep, False, error=str(e))
+                    on_episode_done(ep, False, str(e))
                 return {**ep, "success": False, "error": str(e)}
 
         if len(episodes) <= 1 or parallel <= 1:

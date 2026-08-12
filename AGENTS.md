@@ -40,7 +40,7 @@ All verified against the app code (flet `>=0.25.0`, locked 0.86.x; `build_macos.
 
 ## Architecture
 
-`_fetch()` in `nguonc_downloader.py` disables SSL verification (phim.nguonc.com has misconfigured certs).
+`_fetch()` in `nguonc_downloader.py` uses a **verified** TLS context by default (`_SECURE_CTX`); `INSECURE_HOSTS` is an allowlist of hosts with broken certs that get an unverified fallback only on `SSLCertVerificationError` (currently empty — all live hosts verify OK). Never add a host there without probing it live first.
 
 ### Episode data extraction
 
@@ -92,6 +92,8 @@ Episode checkboxes in `GridView` are wrapped as `ft.Row([ft.Checkbox(data=ep), f
 Download concurrency is per-**episode**, not per-fragment: `download_multiple(parallel=N)` runs episodes in a `ThreadPoolExecutor` (`pool.map` keeps result order), and yt-dlp's `concurrent_fragments` is left at its default (1). The "Concurrent Episodes" slider (1–8, default 1) is disabled unless ≥2 episodes are selected — checkbox `on_change`, Select/Deselect All, and the resolve rebuild all call `refresh_concurrency_state()`.
 
 Progress UI is a terminal-style panel (black `Container` + monospace `ft.Text`): one in-place-updating line per episode (`> EP 3: [download] 45.3% of ~ 1.24GiB at 18.2MiB/s ETA 00:14`), throttled to ~3 updates/sec/episode via `last_progress_tick`, history capped at 100 lines, cleared on each download. There is no log file and no copy/clear buttons. All episode callbacks (`on_episode_start`/`done`/`progress`) fire from pool threads and marshal UI changes via the `ui()` helper.
+
+`download_multiple` callback contract: `on_episode_done(ep, success, error)` — error is a **positional** third arg (empty string on success paths); handlers must accept it even on the error branches.
 
 ## Testing
 
