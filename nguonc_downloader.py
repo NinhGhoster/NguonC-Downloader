@@ -6,6 +6,8 @@ import urllib.request
 import urllib.error
 import os
 import urllib.parse
+import shutil
+import subprocess
 import threading
 import tempfile
 import hmac
@@ -66,8 +68,83 @@ def _fetch(url: str, referer: str = "") -> str:
             and isinstance(e.reason, ssl.SSLCertVerificationError)
         ):
             with urllib.request.urlopen(req, timeout=30, context=_insecure_context()) as resp:
-                return resp.read().decode("utf-8", errors="replace")
+                return resp.read().decode("utf-8", "replace")
         raise
+
+
+_BOOTSTRAP_AAD_PREFIX = "stream-bootstrap-v1\n"
+
+
+class _NoBootstrap(ValueError):
+    """Embed page uses the legacy data-obf format (no bootstrap script)."""
+
+
+def _curl_available() -> bool:
+    return shutil.which("curl") is not None
+
+
+def _curl_fetch(
+    url: str,
+    referer: str = "",
+    method: str = "GET",
+    headers: Optional[dict] = None,
+    body: Optional[str] = None,
+    timeout: int = 30,
+) -> tuple[int, bytes, dict[str, str]]:
+    """curl fetch that returns the response body."""
+    if not _curl_available():
+        raise RuntimeError("curl is not available on PATH")
+
+    body_path = None
+    out_fd, out_path = tempfile.mkstemp(suffix=".curlout")
+    os.close(out_fd)
+    try:
+        all_headers = dict(headers or {})
+        all_headers.setdefault("User-Agent", USER_AGENT)
+        if referer:
+            all_headers.setdefault("Referer", referer)
+        cmd = [
+            "curl", "-sS", "--http2", "--compressed",
+            "-m", str(timeout),
+            "-o", out_path, "-D", "-", "-w", "\n%{http_code}",
+        ]
+        if method.upper() != "GET":
+            cmd += ["-X", method.upper()]
+        for key, value in all_headers.items():
+            cmd += ["-H", f"{key}: {value}"]
+        if body is not None:
+            fd, body_path = tempfile.mkstemp(suffix=".curlbody")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(body)
+            cmd += ["--data-binary", f"@{body_path}"]
+        cmd.append(url)
+
+        proc = subprocess.run(cmd, capture_output=True, timeout=timeout + 10)
+        if proc.returncode != 0:
+            err = proc.stderr.decode("utf-8", "replace").strip()
+            raise RuntimeError(f"curl failed for {url}: {err or f'exit {proc.returncode}'}")
+
+        raw = proc.stdout
+        sep = raw.rfind(b"\n\n")
+        if sep < 0:
+            raise RuntimeError(f"unexpected curl response from {url}")
+        head_block = raw[:sep].decode("latin-1", "replace")
+        status = int(raw[sep + 2:].strip() or 0)
+        resp_headers: dict[str, str] = {}
+        for line in head_block.splitlines():
+            if ":" in line and not line.startswith(("HTTP/", "  ")):
+                k, v = line.split(":", 1)
+                resp_headers[k.strip().lower()] = v.strip()
+        with open(out_path, "rb") as fh:
+            resp_body = fh.read()
+        return status, resp_body, resp_headers
+    finally:
+        for path in (body_path, out_path):
+            if path:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
 
 
 class NguoncDownloader:
@@ -184,6 +261,138 @@ class NguoncDownloader:
         plaintext = AESGCM(key).decrypt(iv, ciphertext, None)
         return plaintext.decode("utf-8")
 
+    @staticmethod
+    def _open_bootstrap(envelope: dict, api_href: str) -> dict:
+        """Decrypt the player's aesgcm-v1 bootstrap envelope.
+
+        Key derivation (from the embed page's own public JS):
+        key = AAD = SHA-256(b"stream-bootstrap-v1\\n" + api_href)
+        AES-256-GCM, 12-byte IV from the envelope's hex `iv`.
+        """
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+        if envelope.get("format") != "aesgcm-v1":
+            raise ValueError(f"Unsupported bootstrap format: {envelope.get('format')!r}")
+        iv_hex = envelope.get("iv", "")
+        data_b64 = envelope.get("data", "")
+        if not re.fullmatch(r"[0-9a-fA-F]{24}", iv_hex) or not data_b64:
+            raise ValueError("Malformed bootstrap envelope")
+
+        aad = f"{_BOOTSTRAP_AAD_PREFIX}{api_href}".encode("utf-8")
+        key = hashlib.sha256(aad).digest()
+        plaintext = AESGCM(key).decrypt(
+            bytes.fromhex(iv_hex), base64.b64decode(data_b64), aad,
+        )
+        return json.loads(plaintext.decode("utf-8"))
+
+    def _bootstrap_playlist(self, embed_url: str) -> tuple[str, str]:
+        """Resolve an embed URL through the player's bootstrap POST flow.
+
+        Returns (playlist_text, video_hash). Playlist text is the decrypted
+        m3u8 (or the raw text when the server returns it unencrypted).
+        The embed host blocks HTTP/1.1 with Cloudflare 403, so all embed
+        requests go through curl's HTTP/2.
+
+        Raises _NoBootstrap when the page has no stream-bootstrap script
+        (legacy data-obf page) — callers may fall back. All other errors
+        are real failures and should propagate.
+        """
+        parsed = urllib.parse.urlparse(embed_url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+
+        status, html_bytes, _ = _curl_fetch(
+            embed_url, referer=self.url, timeout=30,
+        )
+        if status != 200:
+            raise ValueError(f"HTTP {status} from {parsed.hostname or 'embed host'}")
+        html = html_bytes.decode("utf-8", "replace")
+
+        boot_m = re.search(
+            r'<script id="stream-bootstrap"[^>]*>(.*?)</script>', html, re.DOTALL,
+        )
+        if not boot_m:
+            raise _NoBootstrap("stream-bootstrap script missing from embed page")
+        boot_meta = json.loads(boot_m.group(1))
+        api_href = boot_meta.get("api")
+        if not api_href or urllib.parse.urlparse(api_href).netloc != parsed.netloc:
+            raise ValueError("Invalid bootstrap api URL")
+
+        hash_match = re.search(r"[?&]hash=([0-9a-f]+)", embed_url)
+        video_hash = hash_match.group(1) if hash_match else ""
+
+        movie_parsed = urllib.parse.urlparse(self.url)
+        movie_origin = f"{movie_parsed.scheme}://{movie_parsed.netloc}" if self.url else ""
+        post_body = json.dumps({
+            "action": "bootstrap",
+            "referrer": self.url[:4096],
+            "frame_origins": [movie_origin] if movie_origin else [],
+            "request_grant": True,
+            "playlist_format": "aesgcm-v2",
+            "pretty_url": True,
+            "path_chunks": True,
+            "bootstrap_format": "aesgcm-v1",
+        })
+
+        status, resp_bytes, resp_headers = _curl_fetch(
+            api_href,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Origin": origin,
+                "Referer": embed_url,
+            },
+            body=post_body,
+            timeout=30,
+        )
+        if status in (429, 503):
+            retry = resp_headers.get("retry-after", "60")
+            raise ValueError(f"Rate limited by embed host (retry after {retry}s)")
+        if status != 200:
+            err_detail = ""
+            try:
+                err_detail = json.loads(resp_bytes).get("error", "")
+            except Exception:
+                pass
+            host = parsed.hostname or "embed host"
+            raise ValueError(
+                f"HTTP {status} from {host} (bootstrap{': ' + err_detail if err_detail else ''})"
+            )
+
+        envelope = json.loads(resp_bytes)
+        if envelope.get("format") == "aesgcm-v1":
+            opened = self._open_bootstrap(envelope, api_href)
+        else:
+            opened = envelope
+        video_hash = opened.get("video") or video_hash
+
+        if opened.get("turnstileEnabled") and not opened.get("preissued"):
+            raise ValueError("Turnstile verification required (no preissued grant)")
+
+        preissued = opened.get("preissued") or {}
+        playlist_url = preissued.get("playlist")
+        if not playlist_url:
+            raise ValueError("Bootstrap response has no preissued playlist")
+        if urllib.parse.urlparse(playlist_url).netloc != parsed.netloc:
+            raise ValueError("Playlist URL on unexpected host")
+
+        status, pl_bytes, _ = _curl_fetch(
+            playlist_url, referer=embed_url, timeout=30,
+        )
+        if status != 200:
+            raise ValueError(f"HTTP {status} fetching playlist")
+        playlist_text = pl_bytes.decode("utf-8", "replace")
+
+        if "#ENC-AESGCM" in playlist_text:
+            playlist_text = self._decrypt_m3u8(playlist_text, video_hash)
+
+        return playlist_text, video_hash
+
+    def _write_playlist(self, playlist_text: str) -> str:
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".m3u8", delete=False)
+        tmp.write(playlist_text)
+        tmp.close()
+        return tmp.name
+
     def resolve_stream_url(self, embed_url: str) -> str:
         html = _fetch(embed_url, referer=self.url)
 
@@ -200,31 +409,39 @@ class NguoncDownloader:
         return f"{base_domain}/{sub_base64}.m3u8"
 
     def _resolve_one(self, ep: dict, season: int = 1) -> dict:
-        embed_html = _fetch(ep["embed"], referer=self.url)
+        embed_url = ep["embed"]
+        used_bootstrap = False
 
-        obf_m = re.search(r'data-obf="([^"]+)"', embed_html)
-        if not obf_m:
-            raise ValueError(f"Could not find data-obf in {ep['embed']}")
+        if _curl_available():
+            try:
+                playlist_text, _ = self._bootstrap_playlist(embed_url)
+                m3u8_url = self._write_playlist(playlist_text)
+                used_bootstrap = True
+            except _NoBootstrap:
+                # Legacy data-obf page — fall through below.
+                used_bootstrap = False
 
-        stream_data = json.loads(base64.b64decode(obf_m.group(1)).decode())
-        sub_base64 = stream_data["sUb"]
-        video_hash = stream_data.get("hD", "")
+        if not used_bootstrap:
+            embed_html = _fetch(embed_url, referer=self.url)
 
-        parsed = urllib.parse.urlparse(ep["embed"])
-        base_domain = f"{parsed.scheme}://{parsed.netloc}"
-        encrypted_url = f"{base_domain}/{sub_base64}.m3u8"
+            obf_m = re.search(r'data-obf="([^"]+)"', embed_html)
+            if not obf_m:
+                raise ValueError(f"Could not find data-obf in {embed_url}")
 
-        encrypted = _fetch(encrypted_url, referer=ep["embed"])
-        if "#ENC-AESGCM" in encrypted:
-            decrypted = self._decrypt_m3u8(encrypted, video_hash)
-            tmp = tempfile.NamedTemporaryFile(
-                mode="w", suffix=".m3u8", delete=False
-            )
-            tmp.write(decrypted)
-            tmp.close()
-            m3u8_url = tmp.name
-        else:
-            m3u8_url = encrypted_url
+            stream_data = json.loads(base64.b64decode(obf_m.group(1)).decode())
+            sub_base64 = stream_data["sUb"]
+            video_hash = stream_data.get("hD", "")
+
+            parsed = urllib.parse.urlparse(embed_url)
+            base_domain = f"{parsed.scheme}://{parsed.netloc}"
+            encrypted_url = f"{base_domain}/{sub_base64}.m3u8"
+
+            encrypted = _fetch(encrypted_url, referer=embed_url)
+            if "#ENC-AESGCM" in encrypted:
+                decrypted = self._decrypt_m3u8(encrypted, video_hash)
+                m3u8_url = self._write_playlist(decrypted)
+            else:
+                m3u8_url = encrypted_url
 
         return {
             "num": ep["name"],
