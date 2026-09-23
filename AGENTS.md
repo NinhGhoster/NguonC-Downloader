@@ -97,7 +97,7 @@ Progress UI is a terminal-style panel (black `Container` + monospace `ft.Text`):
 
 ## Testing
 
-No test suite exists. The scraper is regex-based against **live** site HTML that changes without notice — after any scraper/resolver change, verify against real pages:
+No test suite exists. The scraper is regex-based against **live** site HTML that changes without notice — after any scraper/resolver change, verify against real pages. A live embed host may block automated requests; in that case, resolution should report per-episode errors rather than treating them as missing URLs:
 
 ```bash
 uv run python -m py_compile nguonc_downloader.py nguonc_app.py
@@ -106,8 +106,13 @@ from nguonc_downloader import NguoncDownloader
 d = NguoncDownloader('https://phim.nguonc.com/phim/ngu-dinh-dao')
 info = d.scrape()
 res = d.resolve_all_m3u8(0)
-assert info['servers'] and sum(1 for r in res if r['m3u8']) >= len(res) - 1
-print('OK', info['title'], info['year'])
+assert info['servers'] and res
+available = sum(1 for r in res if r['m3u8'])
+assert all(r['m3u8'] or r.get('error') for r in res)
+print('OK', info['title'], info['year'], f'{available}/{len(res)} streams')
+for r in res:
+    if not r['m3u8']:
+        print('UNAVAILABLE', r['num'], r['error'])
 "
 ```
 

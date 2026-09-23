@@ -331,14 +331,16 @@ class NguoncApp:
             server_idx = int(server_dropdown.value)
             seq = self._resolve_seq = self._resolve_seq + 1
             set_status("Resolving episode streams... \u23f3")
+            download_btn.disabled = True
             episodes_grid.controls.clear()
             page.update()
 
             def do_resolve():
+                resolve_error = ""
                 try:
                     resolved = self.downloader.resolve_all_m3u8(server_idx, season=1)
                 except Exception as ex:
-                    ui(lambda: set_status(f"m3u8 resolution failed: {ex}", ft.Colors.RED))
+                    resolve_error = str(ex)
                     resolved = []
 
                 if seq != getattr(self, "_resolve_seq", 0):
@@ -352,6 +354,7 @@ class NguoncApp:
                             "num": ep["name"],
                             "embed": ep["embed"],
                             "m3u8": None,
+                            "error": resolve_error or "Could not resolve stream",
                             "filename": self.downloader.generate_filename(ep["name"], season=1),
                         } for ep in server["list"]]
                     except Exception:
@@ -359,16 +362,47 @@ class NguoncApp:
 
                 def apply():
                     episodes_grid.controls.clear()
+                    available = sum(1 for ep in self.episodes_resolved if ep.get("m3u8"))
+                    total = len(self.episodes_resolved)
                     for ep in self.episodes_resolved:
+                        available_ep = bool(ep.get("m3u8"))
                         cb = ft.Checkbox(
-                            value=True,
+                            value=available_ep,
+                            disabled=not available_ep,
                             data=ep,
                             on_change=lambda _: refresh_concurrency_state(),
                         )
-                        label = ft.Text(f"EP {ep['num']}", selectable=True)
+                        suffix = "" if available_ep else " (unavailable)"
+                        label = ft.Text(f"EP {ep['num']}{suffix}", selectable=True)
                         episodes_grid.controls.append(ft.Row([cb, label]))
+                    download_btn.disabled = available == 0
                     episodes_grid.update()
                     refresh_concurrency_state()
+                    if total and available == total:
+                        set_status(f"Resolved {available}/{total} episode streams \u2713")
+                    elif available:
+                        set_status(
+                            f"Resolved {available}/{total} episodes; unavailable episodes are listed in Terminal.",
+                            ft.Colors.RED,
+                        )
+                    else:
+                        set_status(
+                            f"Resolve failed: 0/{total} episodes. See Terminal for details.",
+                            ft.Colors.RED,
+                        )
+                    if total:
+                        color = None if available == total else ft.Colors.RED
+                        add_terminal_line(
+                            f"$ Resolve: {available}/{total} episode streams available",
+                            color,
+                        )
+                        for ep in self.episodes_resolved:
+                            if not ep.get("m3u8"):
+                                add_terminal_line(
+                                    f"! EP {ep['num']}: {ep.get('error') or 'No m3u8 URL'}",
+                                    ft.Colors.RED,
+                                )
+                        page.update()
 
                 ui(apply)
 
@@ -383,7 +417,8 @@ class NguoncApp:
         def toggle_all(select: bool):
             for c in episodes_grid.controls:
                 if isinstance(c, ft.Row) and isinstance(c.controls[0], ft.Checkbox):
-                    c.controls[0].value = select
+                    checkbox = c.controls[0]
+                    checkbox.value = select if not checkbox.disabled else False
             refresh_concurrency_state()
 
         status_lines: dict[str, ft.Text] = {}
@@ -451,7 +486,12 @@ class NguoncApp:
 
             selected = []
             for c in episodes_grid.controls:
-                if isinstance(c, ft.Row) and isinstance(c.controls[0], ft.Checkbox) and c.controls[0].value:
+                if (
+                    isinstance(c, ft.Row)
+                    and isinstance(c.controls[0], ft.Checkbox)
+                    and c.controls[0].value
+                    and c.controls[0].data.get("m3u8")
+                ):
                     selected.append(c.controls[0].data)
 
             if not selected:

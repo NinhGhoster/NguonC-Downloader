@@ -35,6 +35,21 @@ def _insecure_context() -> ssl.SSLContext:
     return ctx
 
 
+def _format_resolve_error(embed_url: str, error: Exception) -> str:
+    host = urllib.parse.urlparse(embed_url).hostname or "embed host"
+    if isinstance(error, urllib.error.HTTPError):
+        server = (error.headers.get("Server", "") or "").lower()
+        cloudflare = " (Cloudflare)" if "cloudflare" in server or error.headers.get("CF-RAY") else ""
+        return f"HTTP {error.code} from {host}{cloudflare}"
+    if isinstance(error, urllib.error.URLError):
+        reason = error.reason
+        if isinstance(reason, ssl.SSLCertVerificationError):
+            return f"TLS certificate verification failed for {host}"
+        return f"Network error from {host}: {reason}"
+    message = str(error).strip()
+    return message or f"{type(error).__name__} from {host}"
+
+
 def _fetch(url: str, referer: str = "") -> str:
     host = (urllib.parse.urlparse(url).hostname or "").lower()
     req = urllib.request.Request(url, headers={
@@ -245,11 +260,12 @@ class NguoncDownloader:
         def resolve_one(ep: dict) -> dict:
             try:
                 return self._resolve_one(ep, season=season)
-            except Exception:
+            except Exception as ex:
                 return {
                     "num": ep["name"],
                     "embed": ep["embed"],
                     "m3u8": None,
+                    "error": _format_resolve_error(ep["embed"], ex),
                     "filename": self.generate_filename(ep["name"], season=season),
                 }
 
@@ -328,15 +344,16 @@ class NguoncDownloader:
                 on_episode_start(ep)
 
             if not ep["m3u8"]:
+                error = ep.get("error") or "No m3u8 URL"
                 if on_episode_done:
-                    on_episode_done(ep, False, "No m3u8 URL")
-                return {**ep, "success": False, "error": "No m3u8 URL"}
+                    on_episode_done(ep, False, error)
+                return {**ep, "success": False, "error": error}
 
             output_path = os.path.join(episode_dir, ep["filename"])
 
             if os.path.exists(output_path):
                 if on_episode_done:
-                    on_episode_done(ep, True)
+                    on_episode_done(ep, True, "")
                 return {**ep, "success": True, "skipped": True}
 
             def _on_progress(line: str):
@@ -351,7 +368,7 @@ class NguoncDownloader:
                     on_progress=_on_progress,
                 )
                 if on_episode_done:
-                    on_episode_done(ep, ok)
+                    on_episode_done(ep, ok, "")
                 return {**ep, "success": ok}
             except Exception as e:
                 if on_episode_done:
