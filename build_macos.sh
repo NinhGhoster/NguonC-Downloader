@@ -35,6 +35,15 @@ if [ -f "$PLIST" ]; then
     plutil -replace CFBundleDisplayName -string "$APP_NAME" "$PLIST"
 fi
 
+# Re-seal after any Info.plist edits — patching post-sign breaks the code
+# signature and Gatekeeper reports the app as "damaged". Ad-hoc (-) is enough
+# for open-source releases (no Apple Developer ID); users still right-click → Open
+# or `xattr -cr` once for quarantine.
+echo "Re-signing ad-hoc..."
+codesign --force --deep --sign - "$APP_PATH"
+codesign --verify --deep --strict "$APP_PATH"
+echo "Code signature OK"
+
 # Stage a stable path for CI dmg step
 if [ "$APP_PATH" != "dist/$APP_NAME.app" ]; then
     rm -rf "dist/$APP_NAME.app"
