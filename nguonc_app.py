@@ -262,22 +262,26 @@ class NguoncApp:
         )
 
         def load_movie():
-            url = url_field.value.strip()
-            if not url:
-                snack(page, "Please enter a URL")
-                return
+            try:
+                url = (url_field.value or "").strip()
+                if not url:
+                    set_status("Error: Please enter a URL ❌", ft.Colors.RED)
+                    return
 
-            load_btn.disabled = True
-            load_btn.text = "Loading..."
-            title_text.value = ""
-            subtitle_text.value = ""
-            year_field.value = ""
-            server_dropdown.options = []
-            server_dropdown.value = None
-            download_btn.disabled = True
-            episodes_grid.controls.clear()
-            set_status("Loading... \u23f3")
-            page.update()
+                load_btn.disabled = True
+                load_btn.text = "Loading..."
+                title_text.value = ""
+                subtitle_text.value = ""
+                year_field.value = ""
+                server_dropdown.options = []
+                server_dropdown.value = None
+                download_btn.disabled = True
+                episodes_grid.controls.clear()
+                set_status("Loading... ⏳")
+                page.update()
+            except Exception as ex:
+                set_status(f"Error: {ex} ❌", ft.Colors.RED)
+                return
 
             def do_load():
                 try:

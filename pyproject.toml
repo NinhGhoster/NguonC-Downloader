@@ -8,6 +8,7 @@ dependencies = [
     "flet>=0.25.0",
     "yt-dlp",
     "cryptography",
+    "httpx[http2]",
 ]
 
 [dependency-groups]
@@ -15,3 +16,11 @@ dev = [
     "flet-cli",
     "pyinstaller",
 ]
+
+[tool.flet]
+app.module = "nguonc_app"
+product = "NguonC Downloader"
+description = "Cross-platform desktop app that downloads movies from phim.nguonc.com"
+
+[tool.flet.macos]
+org = "com.nguonc.downloader"

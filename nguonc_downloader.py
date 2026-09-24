@@ -83,6 +83,44 @@ def _curl_available() -> bool:
     return shutil.which("curl") is not None
 
 
+_CURL_HTTP2: Optional[bool] = None
+
+
+def _curl_supports_http2() -> bool:
+    """True when the system curl can speak HTTP/2 (required by embed host)."""
+    global _CURL_HTTP2
+    if _CURL_HTTP2 is not None:
+        return _CURL_HTTP2
+
+    curl = shutil.which("curl")
+    if not curl:
+        _CURL_HTTP2 = False
+        return _CURL_HTTP2
+
+    # `curl --http2 --version` exits non-zero on builds without HTTP/2
+    # ("option --http2: the installed libcurl version does not support this").
+    try:
+        proc = subprocess.run(
+            [curl, "-sS", "--http2", "--version"],
+            capture_output=True,
+            timeout=10,
+        )
+        if proc.returncode == 0:
+            _CURL_HTTP2 = True
+            return _CURL_HTTP2
+    except Exception:
+        pass
+
+    # Fallback: Features line on `curl --version` lists HTTP2 when enabled.
+    try:
+        proc = subprocess.run([curl, "--version"], capture_output=True, timeout=10)
+        out = (proc.stdout + b"\n" + proc.stderr).decode("utf-8", "replace")
+        _CURL_HTTP2 = "HTTP2" in out or "HTTP/2" in out
+    except Exception:
+        _CURL_HTTP2 = False
+    return _CURL_HTTP2
+
+
 def _curl_fetch(
     url: str,
     referer: str = "",
@@ -91,10 +129,34 @@ def _curl_fetch(
     body: Optional[str] = None,
     timeout: int = 30,
 ) -> tuple[int, bytes, dict[str, str]]:
-    """curl fetch that returns the response body."""
+    """HTTP/2 fetch for embed traffic. Prefer curl --http2; fall back to httpx."""
+    if _curl_available() and _curl_supports_http2():
+        return _curl_http2_fetch(
+            url, referer=referer, method=method,
+            headers=headers, body=body, timeout=timeout,
+        )
+    if _h2_available():
+        return _http2_fetch(
+            url, referer=referer, method=method,
+            headers=headers, body=body, timeout=timeout,
+        )
     if not _curl_available():
         raise RuntimeError("curl is not available on PATH")
+    raise RuntimeError(
+        "System curl has no HTTP/2 support and httpx[h2] is not installed. "
+        "Embed host requires HTTP/2. Install a newer curl (e.g. "
+        "`brew install curl`) or `pip install 'httpx[http2]'`."
+    )
 
+
+def _curl_http2_fetch(
+    url: str,
+    referer: str = "",
+    method: str = "GET",
+    headers: Optional[dict] = None,
+    body: Optional[str] = None,
+    timeout: int = 30,
+) -> tuple[int, bytes, dict[str, str]]:
     body_path = None
     out_fd, out_path = tempfile.mkstemp(suffix=".curlout")
     os.close(out_fd)
@@ -103,8 +165,7 @@ def _curl_fetch(
         all_headers.setdefault("User-Agent", USER_AGENT)
         if referer:
             all_headers.setdefault("Referer", referer)
-        cmd = [
-            "curl", "-sS", "--http2", "--compressed",
+        cmd = ["curl", "-sS", "--http2", "--compressed",
             "-m", str(timeout),
             "-o", out_path, "-D", "-", "-w", "\n%{http_code}",
         ]
@@ -122,6 +183,8 @@ def _curl_fetch(
         proc = subprocess.run(cmd, capture_output=True, timeout=timeout + 10)
         if proc.returncode != 0:
             err = proc.stderr.decode("utf-8", "replace").strip()
+            if "does not support this" in err and "--http2" in err:
+                _CURL_HTTP2 = False
             raise RuntimeError(f"curl failed for {url}: {err or f'exit {proc.returncode}'}")
 
         raw = proc.stdout
@@ -145,6 +208,50 @@ def _curl_fetch(
                     os.unlink(path)
                 except OSError:
                     pass
+
+
+def _h2_available() -> bool:
+    """True when httpx can negotiate HTTP/2 (fallback when curl has no HTTP/2)."""
+    try:
+        import httpx  # noqa: F401
+        import h2  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _can_h2() -> bool:
+    """True when we have any HTTP/2 client for the embed host."""
+    if _curl_available() and _curl_supports_http2():
+        return True
+    return _h2_available()
+
+
+def _http2_fetch(
+    url: str,
+    referer: str = "",
+    method: str = "GET",
+    headers: Optional[dict] = None,
+    body: Optional[str] = None,
+    timeout: int = 30,
+) -> tuple[int, bytes, dict[str, str]]:
+    """HTTP/2 fetch via httpx — used when system curl lacks HTTP/2 support."""
+    import httpx
+
+    all_headers = dict(headers or {})
+    all_headers.setdefault("User-Agent", USER_AGENT)
+    if referer:
+        all_headers.setdefault("Referer", referer)
+
+    with httpx.Client(http2=True, timeout=timeout, follow_redirects=True) as client:
+        resp = client.request(
+            method.upper(),
+            url,
+            headers=all_headers,
+            content=body.encode("utf-8") if body is not None else None,
+        )
+        resp_headers = {k.lower(): v for k, v in resp.headers.items()}
+        return resp.status_code, resp.content, resp_headers
 
 
 class NguoncDownloader:
@@ -412,14 +519,21 @@ class NguoncDownloader:
         embed_url = ep["embed"]
         used_bootstrap = False
 
-        if _curl_available():
-            try:
-                playlist_text, _ = self._bootstrap_playlist(embed_url)
-                m3u8_url = self._write_playlist(playlist_text)
-                used_bootstrap = True
-            except _NoBootstrap:
-                # Legacy data-obf page — fall through below.
-                used_bootstrap = False
+        if not _can_h2():
+            raise RuntimeError(
+                "Embed host requires HTTP/2 but no client is available: "
+                "system curl lacks --http2 and httpx[h2] is not installed. "
+                "Install a newer curl (e.g. `brew install curl`) or "
+                "`pip install 'httpx[http2]'`."
+            )
+
+        try:
+            playlist_text, _ = self._bootstrap_playlist(embed_url)
+            m3u8_url = self._write_playlist(playlist_text)
+            used_bootstrap = True
+        except _NoBootstrap:
+            # Legacy data-obf page — fall through below.
+            used_bootstrap = False
 
         if not used_bootstrap:
             embed_html = _fetch(embed_url, referer=self.url)

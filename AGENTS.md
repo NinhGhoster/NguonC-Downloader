@@ -41,8 +41,9 @@ Scraper/resolver are regex-based against **live** HTML that changes without noti
 | Windows | `uv run flet pack nguonc_app.py --name "NguonC Downloader" --icon assets/icon.ico` | `.exe` |
 | Linux | `xvfb-run uv run flet pack nguonc_app.py --name "NguonC Downloader" --icon assets/icon.png` | renamed `.bin` |
 
-- `build_macos.sh` (macOS only): patches `CFBundleName` in cached Flet.app, builds, restores. Path is hard-coded to `~/.flet/client/flet-desktop-full-0.85.3` while the Python package is **0.86.5** — bump both together if upgrading Flet.
-- Runtime also patches `sys._MEIPASS/Flet.app` plist (`main()` in `nguonc_app.py`).
+- `build_macos.sh` (macOS only): `uv run flet build macos --yes --arch arm64 --python-version 3.12 … -o dist`, then patches `CFBundleName`/`CFBundleDisplayName` on the built `.app` and normalizes to `dist/NguonC Downloader.app`. `--arch arm64` skips the default x86_64 pass (local Rust/`xcrun` link fails with CLT-only; CI runner is arm64). **Local builds need full Xcode** (`xcodebuild`); Command Line Tools alone fails Flutter’s macOS build. macOS no longer uses `flet pack` (PyInstaller onefile is deprecated on macOS; events may not reach the handler in packed builds). `[tool.flet]` / `[tool.flet.macos]` in `pyproject.toml` supply product/description/org. Flutter **3.44.8** is auto-installed under `~/flutter/3.44.8` (CI caches `~/flutter`, key `flutter-${{ runner.os }}-3.44.8`; `timeout-minutes: 45`).
+- Windows/Linux CI still use `flet pack`.
+- Runtime also patches `sys._MEIPASS/Flet.app` plist (`main()` in `nguonc_app.py`) when packed.
 - CI: `.github/workflows/build.yml` — tag push (`*`), PR, or manual. Python 3.12, `uv sync --frozen`. Release job runs **only on tags** (`softprops/action-gh-release`). Tags: `YYYY.MM.DD` (force-push to move).
 - Icons: `assets/icon.png` source; `icon.icns` / `icon.ico` already committed for pack.
 
@@ -66,7 +67,7 @@ Scraper/resolver are regex-based against **live** HTML that changes without noti
 
 ### m3u8 resolution
 
-**Primary (live ~2026-09): HTTP/2 bootstrap POST.** Embed host (`embed*.streamc.xyz`) is behind Cloudflare and **hard-blocks HTTP/1.1 with 403** — urllib cannot negotiate h2, so embed traffic goes through system `curl --http2` (`_curl_fetch`; curl ships with macOS / Win10+ / Linux). Flow (from the player’s own public JS):
+**Primary (live ~2026-09): HTTP/2 bootstrap POST.** Embed host (`embed*.streamc.xyz`) is behind Cloudflare and **hard-blocks HTTP/1.1 with 403** — urllib cannot negotiate h2, so embed traffic goes through system `curl --http2` (`_curl_fetch`; curl ships with macOS / Win10+ / Linux). If the system curl **lacks HTTP/2** (`curl --http2 …` → "installed libcurl version does not support this"), fall back to `httpx` with `http2=True` (requires `httpx[http2]` / `h2`). `_curl_supports_http2()` probes once and caches; `_can_h2()` is the gate for bootstrap attempts. Flow (from the player’s own public JS):
 
 1. `GET embed.php?hash=...` (h2) → shell HTML with `<script id="stream-bootstrap" type="application/json">{"api":"<embed url>"}</script>` (no `data-obf` on these pages).
 2. `POST` that `api` URL (h2): `Content-Type: application/json`, **`Origin: <embed origin>`** (missing → `403 {"error":"wrong_origin"}`), `Referer: <embed url>`; body `{"action":"bootstrap","referrer":<movie url>,"frame_origins":[<movie origin>],"request_grant":true,"playlist_format":"aesgcm-v2","pretty_url":true,"path_chunks":true,"bootstrap_format":"aesgcm-v1"}`. No cookies (`credentials` omitted).
