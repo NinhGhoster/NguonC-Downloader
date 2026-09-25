@@ -321,13 +321,7 @@ class NguoncDownloader:
         if m:
             self.director = m.group(1)
 
-        m = re.search(r'id="nc-episode-data">(\[.*?\])</', html, re.DOTALL)
-        if not m:
-            m = re.search(r'var episodes\s*=\s*(\[.*?\]);', html, re.DOTALL)
-        if not m:
-            raise ValueError("Could not find episode data on page")
-
-        self.servers = json.loads(m.group(1))
+        self.servers = self._fetch_servers(html)
 
         return {
             "title": self.title,
@@ -336,6 +330,38 @@ class NguoncDownloader:
             "director": self.director,
             "servers": self.servers,
         }
+
+    def _fetch_servers(self, html: str) -> list[dict]:
+        # Primary (site redesign 2026-09-24): data-episode-url points to a JSON
+        # endpoint returning {"servers":[{"name","list":[{name,slug,embed}]}]}.
+        m = re.search(r'data-episode-url="([^"]+)"', html)
+        if m:
+            ep_url = m.group(1)
+            try:
+                data = json.loads(_fetch(ep_url, referer=self.url))
+                servers = data.get("servers") if isinstance(data, dict) else None
+                if servers:
+                    return servers
+            except Exception:
+                pass
+
+        # Fallback: inline episode data (legacy redesign ~2026-07).
+        m = re.search(r'id="nc-episode-data">(\[.*?\])</', html, re.DOTALL)
+        if not m:
+            m = re.search(r'var episodes\s*=\s*(\[.*?\]);', html, re.DOTALL)
+        if m:
+            return json.loads(m.group(1))
+
+        # Last resort: conventional /episodes endpoint next to the movie URL.
+        try:
+            data = json.loads(_fetch(self.url + "/episodes", referer=self.url))
+            servers = data.get("servers") if isinstance(data, dict) else None
+            if servers:
+                return servers
+        except Exception:
+            pass
+
+        raise ValueError("Could not find episode data on page")
 
     @staticmethod
     def _decrypt_m3u8(encrypted_content: str, video_hash: str) -> str:

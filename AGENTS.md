@@ -63,7 +63,7 @@ Scraper/resolver are regex-based against **live** HTML that changes without noti
 
 ### Episode data
 
-`<div id="nc-episode-data">[{...}]</div>` (redesign ~2026-07); fallback `var episodes = [...]`. Server key `name` (was `server_name`); episode: `name`/`slug`/`embed`. Year: `https://phim.nguonc.com/api/film/{slug}` (category `Năm`), slug via `_extract_slug()`, HTML regex fallbacks.
+**Primary (site redesign 2026-09-24):** movie page has `data-episode-url="…/phim/{slug}/episodes"`; GET it (JSON) → `{"servers":[{"name","list":[{name,slug,embed}]}]}`. Inline `id="nc-episode-data">[{...}]` and `var episodes = [...]` are **legacy fallbacks** (no longer present in HTML). `{url}/episodes` as last resort. Server key `name` (was `server_name`); episode: `name`/`slug`/`embed`. Year: `https://phim.nguonc.com/api/film/{slug}` (category `Năm`), slug via `_extract_slug()`, HTML regex fallbacks.
 
 ### m3u8 resolution
 
