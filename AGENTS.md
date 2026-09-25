@@ -10,7 +10,7 @@ uv sync          # CI uses: uv sync --frozen
 uv run nguonc_app.py
 ```
 
-Python `>=3.10` (CI: 3.12). Runtime deps in `[project]`; `flet-cli` / `pyinstaller` are dev-group but installed by default `uv sync`. No external yt-dlp binary.
+Python `>=3.10` (CI: 3.12). Runtime deps in `[project]`; `flet-cli` / `pyinstaller` are dev-group but installed by default `uv sync`. No external yt-dlp binary. **`flet` is pinned `==0.86.5`** — `flet build` converts `project.dependencies` → requirements and installs them into the bundle **ignoring `uv.lock`**; a loose `>=` range shipped flet 1.x while source ran 0.86.5 (two site-packages trees in serious_python: outer = runtime, `app/.venv` = leftover).
 
 ## Verify (no test suite / linter / typecheck)
 
@@ -44,7 +44,7 @@ Scraper/resolver are regex-based against **live** HTML that changes without noti
 - `build_macos.sh` (macOS only): `uv run flet build macos --yes --arch arm64 --python-version 3.12 … -o dist`, patches `CFBundleName`/`CFBundleDisplayName`, then **ad-hoc re-signs** (`codesign --force --deep --sign -`) — patching Info.plist after Xcode signs invalidates the seal and Gatekeeper reports "app is damaged". Normalizes to `dist/NguonC Downloader.app`. Users still need right-click → Open (or `xattr -cr`) for quarantine; no Apple Developer ID/notarization. `--arch arm64` skips the default x86_64 pass (local Rust/`xcrun` link fails with CLT-only; CI runner is arm64). **Local builds need full Xcode** (`xcodebuild`); Command Line Tools alone fails Flutter’s macOS build. macOS no longer uses `flet pack` (PyInstaller onefile is deprecated on macOS; events may not reach the handler in packed builds). `[tool.flet]` / `[tool.flet.macos]` in `pyproject.toml` supply product/description/org. Flutter **3.44.8** is auto-installed under `~/flutter/3.44.8` (CI caches `~/flutter`, key `flutter-${{ runner.os }}-3.44.8`; `timeout-minutes: 45`).
 - Windows/Linux CI still use `flet pack`.
 - Runtime also patches `sys._MEIPASS/Flet.app` plist (`main()` in `nguonc_app.py`) when packed.
-- CI: `.github/workflows/build.yml` — tag push (`*`), PR, or manual. Python 3.12, `uv sync --frozen`. Release job runs **only on tags** (`softprops/action-gh-release`). Tags: `YYYY.MM.DD` (force-push to move).
+- CI: `.github/workflows/build.yml` — tag push (`*`), PR, or manual. Python 3.12, `uv sync --frozen`. Release job runs **only on tags** (`softprops/action-gh-release`). Tags: `YYYY.MM.DD` (force-push to move; new tag for a new day is fine). macOS release = `.dmg` via `build_macos.sh` (ad-hoc re-sign after Info.plist patch — otherwise Gatekeeper “app is damaged”).
 - Icons: `assets/icon.png` source; `icon.icns` / `icon.ico` already committed for pack.
 
 ## Flet quirks (locked 0.86.5; desktop client 0.85.3)
