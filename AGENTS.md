@@ -90,15 +90,17 @@ If body contains `#ENC-AESGCM;iv=<12-byte-hex>` + base64 line (plaintext vs encr
 
 ### CDN segments
 
-TS on `jps*.hihihoho4.top` (also seen `sings*.amass2.top`); `.html`/`.png` extensions are still MPEG-TS. CDN allows HTTP/1.1 (yt-dlp as-is); only the embed host needs h2.
+TS on `jps*.hihihoho4.top` (also seen `sings*.amass2.top`, `cyin1.sbs`); `.html`/`.png` extensions are still MPEG-TS. CDN allows HTTP/1.1; only the embed host needs h2.
 
 - Segment `Referer` must be the **embed URL** (`download_episode(..., referer=ep["embed"])`).
-- Needs full browser UA + `Accept-Encoding` — bare UA → CF 403. Do not override `Accept-Encoding` in `http_headers` or fragments arrive gzip-corrupted.
+- Verified 2026-11-13: segments download fine with `Referer` + yt-dlp's default UA (native HLS). Do **not** set `Accept-Encoding` in `http_headers` — fragments arrive gzip-corrupted.
 - `download_multiple`’s `referer` parameter is currently **unused** (always uses `ep["embed"]`).
 
 ### Download
 
 Decrypted playlist → temp file; yt-dlp with `enable_file_urls` for local `file://`. `cryptography` required for AES-GCM.
+
+**Must pass `extractor_args={"generic": {"is_live": ["false"]}}`.** yt-dlp’s generic extractor flags a local m3u8 as *live* when it can’t determine a VOD duration, which forces the **ffmpeg** HLS downloader. ffmpeg refuses this CDN’s segment URLs outright — `.png` names aren’t in its `allowed_segment_extensions` → `exit 183` → `The downloaded file is empty` (issue #2; e.g. `cyin1.sbs` hosts). With `is_live=false`, yt-dlp uses its native (urllib) HLS downloader, which fetches the segments fine. Also, `download_multiple` treats an existing output <1 KB as a failed download and re-downloads (a dead ffmpeg run can leave a zero-byte file behind).
 
 ## UI
 

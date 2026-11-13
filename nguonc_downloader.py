@@ -660,6 +660,13 @@ class NguoncDownloader:
             "quiet": True,
             "no_warnings": True,
             "progress_hooks": [hook],
+            # yt-dlp's generic extractor flags a local m3u8 as "live" when it
+            # cannot determine a VOD duration, which forces the ffmpeg
+            # downloader. ffmpeg refuses this CDN's segment URLs outright
+            # (.png names are not in its allowed_segment_extensions ->
+            # exit 183 -> "The downloaded file is empty"). Force VOD so
+            # yt-dlp uses its native (urllib) HLS downloader instead.
+            "extractor_args": {"generic": {"is_live": ["false"]}},
         }
         if referer:
             opts["http_headers"] = {"Referer": referer}
@@ -708,10 +715,14 @@ class NguoncDownloader:
 
             output_path = os.path.join(episode_dir, ep["filename"])
 
+            # A failed download can leave a zero-byte/empty file behind;
+            # don't treat that as a completed episode — re-download.
             if os.path.exists(output_path):
-                if on_episode_done:
-                    on_episode_done(ep, True, "")
-                return {**ep, "success": True, "skipped": True}
+                if os.path.getsize(output_path) > 1024:
+                    if on_episode_done:
+                        on_episode_done(ep, True, "")
+                    return {**ep, "success": True, "skipped": True}
+                os.remove(output_path)
 
             def _on_progress(line: str):
                 if on_progress:
