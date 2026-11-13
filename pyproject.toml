@@ -26,3 +26,11 @@ description = "Cross-platform desktop app that downloads movies from phim.nguonc
 
 [tool.flet.macos]
 org = "com.nguonc.downloader"
+
+# flet 0.86.5's build template pins jni: 1.0.0, but the jni_flutter /
+# shared_preferences_android versions pub resolves today expect jni ^1.1.0;
+# the mismatch is a Dart constant-eval assertion failure ("The generated
+# bindings expect package:jni ^1.1.0, but 1.0.x was imported") that breaks
+# every platform build. Override the template pin.
+[tool.flet.flutter.pubspec.dependency_overrides]
+jni = "^1.1.0"

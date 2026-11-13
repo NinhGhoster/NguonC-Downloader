@@ -46,6 +46,7 @@ Scraper/resolver are regex-based against **live** HTML that changes without noti
 - Runtime also patches `sys._MEIPASS/Flet.app` plist (`main()` in `nguonc_app.py`) when packed.
 - CI: `.github/workflows/build.yml` — tag push (`*`), PR, or manual. Python 3.12, `uv sync --frozen`. Release job runs **only on tags** (`softprops/action-gh-release`). Tags: `YYYY.MM.DD` (force-push to move; new tag for a new day is fine). macOS release = `.dmg` via `build_macos.sh` (ad-hoc re-sign after Info.plist patch — otherwise Gatekeeper “app is damaged”).
 - Icons: `assets/icon.png` source; `icon.icns` / `icon.ico` already committed for pack.
+- `[tool.flet.flutter.pubspec.dependency_overrides]` in `pyproject.toml` overrides flet's build-template pubspec pins. Currently forces `jni: ^1.1.0`: flet 0.86.5's template pins `jni: 1.0.0`, but current `jni_flutter` / `shared_preferences_android` expect `^1.1.0` → Dart constant-eval assertion fails and **every** platform build breaks (seen 2026-11-13). If a future build fails in `generated_plugin.dart` / `messages.g.jni.dart`, check this pin first.
 
 ## Flet quirks (locked 0.86.5; desktop client 0.85.3)
 
