@@ -33,6 +33,8 @@ for r in res:
 
 Scraper/resolver are regex-based against **live** HTML that changes without notice — after any resolver change, re-run against real pages. Expected per-episode failures (report; do not treat as missing URLs): Cloudflare `HTTP 403` (no h2/curl), `wrong_origin` (missing `Origin`), `Rate limited ... retry after Ns` (≈20 bootstrap grants/hour/IP — wait it out), `Turnstile verification required` (no preissued grant; no captcha solving is implemented).
 
+Always run checks via `uv run python` (or `.venv/bin/python`) — the system `python3` has none of the deps. Add `uv lock --check` when `pyproject.toml` changes.
+
 ## Building / CI
 
 | Platform | Command | Output |
@@ -48,7 +50,7 @@ Scraper/resolver are regex-based against **live** HTML that changes without noti
 - Icons: `assets/icon.png` source; `icon.icns` / `icon.ico` already committed for pack.
 - `[tool.flet.flutter.pubspec.dependency_overrides]` in `pyproject.toml` overrides flet's build-template pubspec pins. Currently forces `jni: ^1.1.0`: flet 0.86.5's template pins `jni: 1.0.0`, but current `jni_flutter` / `shared_preferences_android` expect `^1.1.0` → Dart constant-eval assertion fails and **every** platform build breaks (seen 2026-11-13). If a future build fails in `generated_plugin.dart` / `messages.g.jni.dart`, check this pin first.
 
-## Flet quirks (locked 0.86.5; desktop client 0.85.3)
+## Flet quirks (locked 0.86.5)
 
 - `page.clipboard` is **read-only** — use `pbcopy` / `clip` / `xclip` subprocess.
 - `page.scroll = ft.ScrollMode.AUTO` (not `ADAPTIVE`).
@@ -94,14 +96,21 @@ If body contains `#ENC-AESGCM;iv=<12-byte-hex>` + base64 line (plaintext vs encr
 TS on `jps*.hihihoho4.top` (also seen `sings*.amass2.top`, `cyin1.sbs`); `.html`/`.png` extensions are still MPEG-TS. CDN allows HTTP/1.1; only the embed host needs h2.
 
 - Segment `Referer` must be the **embed URL** (`download_episode(..., referer=ep["embed"])`).
-- Verified 2026-11-13: segments download fine with `Referer` + yt-dlp's default UA (native HLS). Do **not** set `Accept-Encoding` in `http_headers` — fragments arrive gzip-corrupted.
+- Do **not** set `Accept-Encoding` in `http_headers` — fragments arrive gzip-corrupted.
+- The CDN can distinguish clients by TLS fingerprint: from a non-VN network it 403s Python clients (`urllib` / `requests` / `httpx`) while `curl` with the same headers gets 200. With a VN IP, yt-dlp's native downloader works fine. So a segment 403 may be network/VPN, not a code bug — test both `curl` and `yt_dlp`'s `urlopen` before touching the resolver.
 - `download_multiple`’s `referer` parameter is currently **unused** (always uses `ep["embed"]`).
 
 ### Download
 
 Decrypted playlist → temp file; yt-dlp with `enable_file_urls` for local `file://`. `cryptography` required for AES-GCM.
 
-**Must pass `extractor_args={"generic": {"is_live": ["false"]}}`.** yt-dlp’s generic extractor flags a local m3u8 as *live* when it can’t determine a VOD duration, which forces the **ffmpeg** HLS downloader. ffmpeg refuses this CDN’s segment URLs outright — `.png` names aren’t in its `allowed_segment_extensions` → `exit 183` → `The downloaded file is empty` (issue #2; e.g. `cyin1.sbs` hosts). With `is_live=false`, yt-dlp uses its native (urllib) HLS downloader, which fetches the segments fine. Also, `download_multiple` treats an existing output <1 KB as a failed download and re-downloads (a dead ffmpeg run can leave a zero-byte file behind).
+**Must pass `extractor_args={"generic": {"is_live": ["false"]}}`.** yt-dlp’s generic extractor flags a local m3u8 as *live* when it can’t determine a VOD duration, which forces the **ffmpeg** HLS downloader. ffmpeg refuses this CDN’s segment URLs outright — `.png` names aren’t in its `allowed_segment_extensions` → `exit 183` → `The downloaded file is empty` (issue #2; e.g. `cyin1.sbs` hosts). With `is_live=false`, yt-dlp uses its native (urllib) HLS downloader, which fetches the segments fine.
+
+Do **not** require or bundle `ffmpeg`: nothing in a `flet pack` / `flet build` bundle includes an ffmpeg binary, and the native HLS path needs none. (Issue #2’s proposed patch added an ffmpeg+ffprobe remux; rejected for that reason.)
+
+`The downloaded file is empty` has two separate causes — check which before changing code: (1) ffmpeg FD was selected (is_live flag missing), (2) segments return HTTP 403 (network/VPN — see CDN segments above).
+
+Also, `download_multiple` treats an existing output <1 KB as a failed download and re-downloads (a dead ffmpeg run can leave a zero-byte file behind).
 
 ## UI
 
