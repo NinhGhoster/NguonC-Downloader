@@ -1,0 +1,10 @@
+[package]
+name = "nguonc-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nguonc-core.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+eframe = "0.32"
