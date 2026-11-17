@@ -44,6 +44,9 @@ async fn main() -> Result<()> {
                 let sticky = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
                 let s2 = sticky.clone();
                 download(m3u8, &out.to_string_lossy(), &referer, parallel, move |p: Progress| {
+                    if p.done != 1 && p.done % 20 != 0 && p.done != p.total {
+                        return;
+                    }
                     let line = format!("\r  {}/{} segments ({:.0} MiB)", p.done, p.total, p.bytes as f64 / 1048576.0);
                     let mut g = s2.lock().unwrap();
                     g.clear();

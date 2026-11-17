@@ -21,7 +21,7 @@ cargo build --release        # target/release/nguonc (CLI) and target/release/ng
 ## Run
 
 ```bash
-# GUI (brand window title: rust)
+# GUI (window title: "NguonC Downloader")
 cargo run -p nguonc-app --release
 
 # CLI (needs VPN for resolve/download)
@@ -30,9 +30,27 @@ cargo run -p nguonc-cli -- download "https://phim.nguonc.com/phim/gign-luc-luong
 # usage: download <url> <out-dir> [server-idx] [ep-idx] [parallel]
 ```
 
-GUI defaults: output dir `~/Downloads` (editable in-app), concurrency slider
-1–8 enabled only with ≥2 episodes checked (matches the Python app), terminal
-panel capped at 100 lines with 0.3 s per-episode progress throttle.
+GUI defaults: window 860×720 (min 700×600), output dir `~/Downloads`
+(editable, with a native Browse… folder picker), "Create movie name
+subfolder" checkbox (default on), concurrency slider 1–8 enabled only with
+≥2 episodes checked (matches the Python app), black terminal panel capped at
+100 lines with in-place per-episode progress lines (0.3 s throttle) plus an
+overall segment progress bar while downloading.
+
+Feature parity with the Python GUI: theme toggle (System → Dark → Light),
+status bar, English-title display (falls back to the Vietnamese title),
+`{year} | {n} episodes` subtitle, Select All / Deselect All, 4-column
+episode grid, and the GitHub footer link. The Rust GUI also adds a
+**Check for Update** button (the Python app never had one — only the footer
+link): it compares this build's date against the latest GitHub release tag
+(`YYYY.MM.DD`) and shows a modal with a link to the releases page.
+
+Be Vietnam Pro is embedded (`app/assets/BeVietnamPro-Regular.ttf`) so
+Vietnamese diacritics in movie titles render correctly.
+
+Unlike the Python GUI (which resolves every episode's m3u8 when you pick a
+server, burning bootstrap grants), the Rust GUI resolves each episode at
+download time — switching servers costs nothing until you download.
 
 ## Verified live (2026-11-17)
 

@@ -55,6 +55,7 @@ pub async fn download(
     let mut file = std::fs::File::create(&part)?;
     let total = segments.len();
     let mut bytes_total = 0u64;
+    let mut completed = 0usize;
 
     // Bounded-concurrency fetch with ordered writes. We keep it simple and
     // robust: one curl per segment, 3 attempts, write in playlist order.
@@ -85,15 +86,16 @@ pub async fn download(
     let mut ordered = vec![None; total];
     while let Some(res) = results.join_next().await {
         let (idx, body) = res.context("segment task panicked")??;
-        ordered[idx] = Some(body);
-    }
-    for (i, body) in ordered.into_iter().enumerate() {
-        let body = body.context("missing segment")?;
         bytes_total += body.len() as u64;
+        completed += 1;
+        ordered[idx] = Some(body);
+        // Report as segments land, not after the ordered write pass, so
+        // progress callbacks are live during the fetch.
+        on_progress(Progress { done: completed, total, bytes: bytes_total });
+    }
+    for body in ordered.into_iter() {
+        let body = body.context("missing segment")?;
         file.write_all(&body)?;
-        if i == 0 || (i + 1) % 5 == 0 || i + 1 == total {
-            on_progress(Progress { done: i + 1, total, bytes: bytes_total });
-        }
     }
     file.flush()?;
     drop(file);

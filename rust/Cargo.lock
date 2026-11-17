@@ -1952,6 +1952,7 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "nguonc-core",
+ "serde_json",
  "tokio",
 ]
 
