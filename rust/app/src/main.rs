@@ -25,13 +25,6 @@ enum ThemeMode {
 }
 
 impl ThemeMode {
-    fn label(self) -> &'static str {
-        match self {
-            ThemeMode::System => "Theme: System",
-            ThemeMode::Dark => "Theme: Dark",
-            ThemeMode::Light => "Theme: Light",
-        }
-    }
     fn next(self) -> Self {
         match self {
             ThemeMode::System => ThemeMode::Dark,
@@ -57,12 +50,24 @@ enum TermColor {
 }
 
 impl TermColor {
-    fn egui(self) -> egui::Color32 {
+    fn egui_for(self, dark: bool) -> egui::Color32 {
         match self {
-            TermColor::Grey => egui::Color32::from_rgb(150, 150, 150),
-            TermColor::Red => egui::Color32::from_rgb(244, 67, 54),
-            TermColor::Green => egui::Color32::from_rgb(76, 175, 80),
-            TermColor::Normal => egui::Color32::from_rgb(230, 230, 230),
+            TermColor::Grey => {
+                if dark {
+                    egui::Color32::from_rgb(130, 136, 145)
+                } else {
+                    egui::Color32::from_rgb(100, 106, 115)
+                }
+            }
+            TermColor::Red => egui::Color32::from_rgb(235, 82, 78),
+            TermColor::Green => egui::Color32::from_rgb(46, 170, 96),
+            TermColor::Normal => {
+                if dark {
+                    egui::Color32::from_rgb(222, 226, 232)
+                } else {
+                    egui::Color32::from_rgb(38, 42, 48)
+                }
+            }
         }
     }
 }
@@ -139,7 +144,7 @@ impl NguoncApp {
             subfolder: true,
             theme: ThemeMode::System,
             status: "Ready".to_string(),
-            logo: logo,
+            logo,
             ..Default::default()
         }
     }
@@ -471,6 +476,12 @@ impl NguoncApp {
 }
 
 impl eframe::App for NguoncApp {
+    /// Match the window's clear color to the active theme so the whole window
+    /// (including any gap around the panel) switches between dark and light.
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        visuals.panel_fill.to_normalized_gamma_f32()
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Drain inbound async messages first so no task touches UI state.
         let msgs: Vec<UiMsg> = self
@@ -493,45 +504,84 @@ impl eframe::App for NguoncApp {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
 
-        egui::CentralPanel::default()
-            .frame(egui::Frame::central_panel(&ctx.style()).inner_margin(egui::Margin::symmetric(14, 10)))
-            .show(ctx, |ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
+        // Accent colors for primary actions and status.
+        let accent = egui::Color32::from_rgb(79, 110, 247);
+        let green = egui::Color32::from_rgb(46, 170, 96);
+        let red = egui::Color32::from_rgb(225, 75, 70);
+        let amber = egui::Color32::from_rgb(200, 145, 30);
+        let muted = ctx.style().visuals.weak_text_color();
+        let dark = ctx.theme() == egui::Theme::Dark;
+        let term_bg = if dark {
+            egui::Color32::from_rgb(18, 20, 24)
+        } else {
+            egui::Color32::from_rgb(245, 246, 248)
+        };
 
-                // Header: brand + theme cycle + update check.
+        egui::CentralPanel::default()
+            .frame(egui::Frame::central_panel(&ctx.style()).inner_margin(egui::Margin::symmetric(18, 14)))
+            .show(ctx, |ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(10.0, 9.0);
+
+                // ── Header ────────────────────────────────────────────────
                 ui.horizontal(|ui| {
                     if let Some(tex) = &self.logo {
-                        ui.add(egui::Image::from_texture(SizedTexture::from_handle(tex)));
+                        ui.add(
+                            egui::Image::from_texture(SizedTexture::from_handle(tex))
+                                .fit_to_exact_size(egui::vec2(30.0, 30.0)),
+                        );
                     }
-                    ui.hyperlink_to(
-                        egui::RichText::new("github.com/NinhGhoster/NguonC-Downloader").strong(),
-                        "https://github.com/NinhGhoster/NguonC-Downloader",
-                    );
-                    if ui.button("Check for Update").clicked() {
-                        self.check_update();
-                    }
-                    if ui.button(self.theme.label()).clicked() {
-                        self.theme = self.theme.next();
-                        ctx.set_theme(self.theme.preference());
-                        ctx.request_repaint();
-                    }
+                    ui.vertical(|ui| {
+                        ui.heading(egui::RichText::new("NguonC Downloader").size(18.0).strong());
+                        ui.hyperlink_to(
+                            egui::RichText::new("github.com/NinhGhoster/NguonC-Downloader")
+                                .size(11.0)
+                                .color(muted),
+                            "https://github.com/NinhGhoster/NguonC-Downloader",
+                        );
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Theme button shows the active mode; click cycles System / Dark / Light.
+                        let theme_label = match self.theme {
+                            ThemeMode::System => "System",
+                            ThemeMode::Dark => "Dark",
+                            ThemeMode::Light => "Light",
+                        };
+                        if ui
+                            .button(egui::RichText::new(format!("Theme: {theme_label}")).size(13.0))
+                            .on_hover_text("Click to cycle: System / Dark / Light")
+                            .clicked()
+                        {
+                            self.theme = self.theme.next();
+                            ctx.set_theme(self.theme.preference());
+                            ctx.request_repaint();
+                        }
+                        if ui.button("Check for Update").clicked() {
+                            self.check_update();
+                        }
+                    });
                 });
+                ui.add_space(2.0);
                 ui.separator();
 
-                // URL row.
+                // ── Movie URL ─────────────────────────────────────────────
+                ui.label(egui::RichText::new("Movie URL").size(12.0).color(muted).strong());
                 ui.horizontal(|ui| {
-                    ui.label("Movie URL:");
-                    ui.add(
+                    let resp = ui.add(
                         egui::TextEdit::singleline(&mut self.movie_url)
                             .hint_text("https://phim.nguonc.com/phim/...")
                             .desired_width(f32::INFINITY),
                     );
                     if ui
-                        .add_enabled(!self.loading && !self.downloading, egui::Button::new("Load Movie"))
+                        .add_enabled(
+                            !self.loading && !self.downloading,
+                            egui::Button::new(egui::RichText::new("Load Movie").strong())
+                                .min_size(egui::vec2(0.0, 26.0)),
+                        )
                         .clicked()
+                        || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                     {
                         let url = self.movie_url.trim().to_string();
-                        if !url.is_empty() {
+                        if !url.is_empty() && !self.loading && !self.downloading {
                             self.set_status("Loading...", false);
                             self.loading = true;
                             self.servers.clear();
@@ -542,14 +592,13 @@ impl eframe::App for NguoncApp {
                             self.ep_progress.clear();
                             let (tx, rx) = mpsc::channel();
                             self.rx = Some(rx);
-                            match self.handle.clone() {
-                                Some(handle) => {
-                                    handle.spawn(async move {
-                                        let result = scrape(&url).await.map_err(|e| e.to_string());
-                                        let _ = tx.send(UiMsg::Scraped { url, result });
-                                    });
-                                }
-                                None => self.loading = false,
+                            if let Some(handle) = self.handle.clone() {
+                                handle.spawn(async move {
+                                    let result = scrape(&url).await.map_err(|e| e.to_string());
+                                    let _ = tx.send(UiMsg::Scraped { url, result });
+                                });
+                            } else {
+                                self.loading = false;
                             }
                         }
                     }
@@ -558,64 +607,90 @@ impl eframe::App for NguoncApp {
                     }
                 });
 
-                // Status bar.
-                let sc = if self.status_red {
-                    egui::Color32::from_rgb(244, 67, 54)
-                } else {
-                    egui::Color32::from_rgb(76, 175, 80)
-                };
-                egui::Frame::group(ui.style())
-                    .inner_margin(egui::Margin::symmetric(10, 6))
-                    .corner_radius(6.0)
-                    .show(ui, |ui| {
-                        ui.add(egui::Label::new(egui::RichText::new(self.status.clone()).color(sc).size(13.0)));
-                    });
+                // ── Status line ───────────────────────────────────────────
+                let sc = if self.status_red { red } else { green };
+                ui.horizontal(|ui| {
+                    // Painted dot: guaranteed to render regardless of font coverage.
+                    let (rect, _resp) =
+                        ui.allocate_exact_size(egui::vec2(10.0, 14.0), egui::Sense::hover());
+                    ui.painter().circle_filled(rect.center(), 4.0, sc);
+                    ui.add(egui::Label::new(
+                        egui::RichText::new(&self.status).size(12.0).color(sc),
+                    ));
+                });
 
                 if self.english_title.is_empty() && self.vietnamese_title.is_empty() {
-                    ui.label("Enter a movie page URL and press Load Movie.");
+                    ui.add_space(8.0);
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(40.0);
+                        ui.label(
+                            egui::RichText::new("Paste a movie URL above and press Load Movie")
+                                .size(14.0)
+                                .color(muted),
+                        );
+                        ui.add_space(6.0);
+                        ui.label(
+                            egui::RichText::new("Vietnamese subtitles · Direct download · No FFmpeg needed")
+                                .size(11.0)
+                                .color(muted),
+                        );
+                    });
                     return;
                 }
 
-                // Title block.
-                ui.label(egui::RichText::new(self.display_title().to_string()).size(20.0).strong());
-                let ep_count = self.servers.first().map(|s| s.eps.len()).unwrap_or(0);
-                ui.label(egui::RichText::new(format!("{}  |  {} episodes", self.year, ep_count)).color(egui::Color32::GRAY));
+                ui.add_space(4.0);
 
-                // Server picker.
-                ui.horizontal(|ui| {
-                    ui.label("Server / Source:");
-                    egui::ComboBox::from_id_salt("server")
-                        .selected_text(
-                            self.servers
-                                .get(self.selected_server)
-                                .map(|s| s.name.as_str())
-                                .unwrap_or(""),
-                        )
-                        .show_ui(ui, |ui| {
-                            for (i, s) in self.servers.iter().enumerate() {
-                                ui.selectable_value(&mut self.selected_server, i, &s.name);
+                // ── Movie info card ───────────────────────────────────────
+                egui::Frame::group(ui.style())
+                    .inner_margin(egui::Margin::symmetric(12, 10))
+                    .corner_radius(8.0)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.heading(
+                                egui::RichText::new(self.display_title()).size(17.0).strong(),
+                            );
+                            if !self.vietnamese_title.is_empty()
+                                && self.vietnamese_title != self.english_title
+                            {
+                                ui.label(
+                                    egui::RichText::new(format!("({})", self.vietnamese_title))
+                                        .size(12.0)
+                                        .color(muted),
+                                );
                             }
                         });
-                });
+                        let n_eps: usize = self.servers.iter().map(|s| s.eps.len()).sum();
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{}  ·  {} episodes  ·  {} server{}",
+                                self.year,
+                                n_eps,
+                                self.servers.len(),
+                                if self.servers.len() == 1 { "" } else { "s" }
+                            ))
+                            .size(12.0)
+                            .color(muted),
+                        );
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Server:").size(12.0).color(muted));
+                            egui::ComboBox::from_id_salt("server")
+                                .selected_text(
+                                    self.servers
+                                        .get(self.selected_server)
+                                        .map(|s| s.name.as_str())
+                                        .unwrap_or(""),
+                                )
+                                .show_ui(ui, |ui| {
+                                    for (i, s) in self.servers.iter().enumerate() {
+                                        ui.selectable_value(&mut self.selected_server, i, &s.name);
+                                    }
+                                });
+                        });
+                    });
 
-                ui.horizontal(|ui| {
-                    if ui.button("Select All").clicked() {
-                        if let Some(server) = self.servers.get_mut(self.selected_server) {
-                            for e in &mut server.eps {
-                                e.checked = true;
-                            }
-                        }
-                    }
-                    if ui.button("Deselect All").clicked() {
-                        if let Some(server) = self.servers.get_mut(self.selected_server) {
-                            for e in &mut server.eps {
-                                e.checked = false;
-                            }
-                        }
-                    }
-                });
+                ui.add_space(4.0);
 
-                // Episode grid.
+                // ── Episode selection ─────────────────────────────────────
                 let nchecked: usize;
                 {
                     let Some(server) = self.servers.get_mut(self.selected_server) else {
@@ -625,98 +700,180 @@ impl eframe::App for NguoncApp {
                     if nchecked < 2 && self.concurrency > 1 {
                         self.concurrency = 1;
                     }
-                    egui::ScrollArea::vertical()
-                        .max_height(170.0)
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("Episodes")
+                                .size(12.0)
+                                .color(muted)
+                                .strong(),
+                        );
+                        ui.add_space(4.0);
+                        if ui.small_button("Select All").clicked() {
+                            for e in &mut server.eps {
+                                e.checked = true;
+                            }
+                        }
+                        if ui.small_button("Deselect All").clicked() {
+                            for e in &mut server.eps {
+                                e.checked = false;
+                            }
+                        }
+                        ui.label(
+                            egui::RichText::new(format!("{nchecked} selected"))
+                                .size(11.0)
+                                .color(muted),
+                        );
+                    });
+
+                    egui::Frame::group(ui.style())
+                        .inner_margin(egui::Margin::symmetric(8, 8))
+                        .corner_radius(8.0)
                         .show(ui, |ui| {
-                            egui::Grid::new("episodes")
-                                .num_columns(4)
-                                .spacing([14.0, 8.0])
+                            egui::ScrollArea::vertical()
+                                .max_height(160.0)
+                                .id_salt("episodes")
                                 .show(ui, |ui| {
-                                    for chunk in server.eps.chunks_mut(4) {
-                                        for ep in chunk {
-                                            ui.horizontal(|ui| {
-                                                let mut checked = ep.checked;
-                                                if ui.checkbox(&mut checked, "").changed() {
-                                                    ep.checked = checked;
+                                    egui::Grid::new("episodes")
+                                        .num_columns(4)
+                                        .spacing([12.0, 6.0])
+                                        .show(ui, |ui| {
+                                            for chunk in server.eps.chunks_mut(4) {
+                                                for ep in chunk {
+                                                    let color = if ep.status.starts_with("fail") {
+                                                        red
+                                                    } else if ep.status.starts_with("downloading")
+                                                        || ep.status.starts_with("resolving")
+                                                    {
+                                                        amber
+                                                    } else if ep.status == "done" {
+                                                        green
+                                                    } else {
+                                                        muted
+                                                    };
+                                                    let mut checked = ep.checked;
+                                                    if ui.checkbox(&mut checked, "").changed() {
+                                                        ep.checked = checked;
+                                                    }
+                                                    let label = if ep.status.is_empty() {
+                                                        format!("EP {}", ep.num)
+                                                    } else {
+                                                        format!("EP {} · {}", ep.num, ep.status)
+                                                    };
+                                                    // "•" (U+2022) exists in all bundled fonts.
+                                                    ui.add(
+                                                        egui::Label::new(
+                                                            egui::RichText::new(format!("• {label}"))
+                                                                .size(12.0)
+                                                                .color(color),
+                                                        )
+                                                        .truncate(),
+                                                    );
                                                 }
-                                                let color = if ep.status.starts_with("fail") {
-                                                    egui::Color32::from_rgb(244, 67, 54)
-                                                } else if ep.status.starts_with("downloading")
-                                                    || ep.status.starts_with("resolving")
-                                                {
-                                                    egui::Color32::from_rgb(200, 150, 0)
-                                                } else if ep.status == "done" {
-                                                    egui::Color32::from_rgb(76, 175, 80)
-                                                } else {
-                                                    ui.visuals().text_color()
-                                                };
-                                                let label = if ep.status.is_empty() {
-                                                    format!("EP {}", ep.num)
-                                                } else {
-                                                    format!("EP {} · {}", ep.num, ep.status)
-                                                };
-                                                ui.label(egui::RichText::new(label).color(color));
-                                            });
-                                        }
-                                        ui.end_row();
-                                    }
+                                                ui.end_row();
+                                            }
+                                        });
                                 });
                         });
                 }
 
-                // Concurrency + subfolder + output dir.
+                ui.add_space(6.0);
+
+                // ── Options ───────────────────────────────────────────────
                 ui.horizontal(|ui| {
-                    ui.label("Concurrent Episodes:");
+                    ui.label(egui::RichText::new("Concurrent episodes:").size(12.0).color(muted));
                     ui.add_enabled(
                         nchecked >= 2,
-                        egui::Slider::new(&mut self.concurrency, 1..=8),
+                        egui::Slider::new(&mut self.concurrency, 1..=8)
+                            .show_value(true)
+                            .text(""),
                     );
-                    if nchecked >= 2 {
-                        ui.label(format!("{nchecked} checked"));
-                    } else {
-                        ui.label("disabled (<2 checked)");
+                    if nchecked < 2 {
+                        ui.label(
+                            egui::RichText::new("(select 2+ to enable)")
+                                .size(11.0)
+                                .color(muted),
+                        );
                     }
                 });
-
-                ui.checkbox(&mut self.subfolder, "Create movie name subfolder");
-
                 ui.horizontal(|ui| {
-                    ui.label("Output dir:");
-                    ui.add(egui::TextEdit::singleline(&mut self.output_dir).desired_width(f32::INFINITY));
-                    if ui.button("Browse...").clicked() {
+                    ui.checkbox(&mut self.subfolder, egui::RichText::new("Save into movie-name subfolder").size(12.0));
+                    ui.label(egui::RichText::new("Output:").size(12.0).color(muted));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.output_dir)
+                            .desired_width(f32::INFINITY)
+                            .font(egui::TextStyle::Monospace),
+                    );
+                    if ui.button("Browse…").clicked() {
                         self.pick_folder();
                     }
                 });
 
-                // Download button.
-                let can_download = !self.loading && !self.downloading && nchecked > 0;
-                let label = if self.downloading { "Downloading..." } else { "Download Selected" };
-                let btn = egui::Button::new(egui::RichText::new(label).color(egui::Color32::WHITE))
-                    .fill(egui::Color32::from_rgb(63, 81, 181))
-                    .min_size(egui::vec2(0.0, 34.0));
-                if ui.add_enabled(can_download, btn).clicked() {
-                    self.start_download();
-                }
+                ui.add_space(8.0);
+
+                // ── Download action ───────────────────────────────────────
+                ui.horizontal(|ui| {
+                    let can_download = !self.loading && !self.downloading && nchecked > 0;
+                    let label = if self.downloading {
+                        "Downloading…"
+                    } else {
+                        "Download Selected"
+                    };
+                    let btn = egui::Button::new(
+                        egui::RichText::new(label).size(14.0).strong().color(egui::Color32::WHITE),
+                    )
+                    .fill(if can_download { accent } else { muted })
+                    .corner_radius(6.0)
+                    .min_size(egui::vec2(180.0, 36.0));
+                    if ui.add_enabled(can_download, btn).clicked() {
+                        self.start_download();
+                    }
+                    ui.label(
+                        egui::RichText::new(if nchecked == 0 {
+                            "Select episodes to begin".to_string()
+                        } else {
+                            format!("{nchecked} episode{} ready", if nchecked == 1 { "" } else { "s" })
+                        })
+                        .size(12.0)
+                        .color(muted),
+                    );
+                });
 
                 // Overall progress bar while downloading.
                 if self.downloading {
+                    ui.add_space(6.0);
                     let (done, total): (usize, usize) = self
                         .ep_progress
                         .values()
                         .fold((0, 0), |(d, t), &(dd, tt)| (d + dd, t + tt));
                     let frac = if total > 0 { done as f32 / total as f32 } else { 0.0 };
-                    ui.add(egui::ProgressBar::new(frac).text(format!("{done}/{total} segments")));
+                    ui.add(
+                        egui::ProgressBar::new(frac)
+                            .text(format!("{done} / {total} segments"))
+                            .desired_height(10.0),
+                    );
                 }
 
-                ui.separator();
-                ui.label(egui::RichText::new("Terminal:").strong());
+                ui.add_space(8.0);
+
+                // ── Terminal ──────────────────────────────────────────────
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Terminal").size(12.0).color(muted).strong());
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(format!("{} lines", self.terminal.len()))
+                            .size(11.0)
+                            .color(muted),
+                    );
+                });
                 egui::Frame::NONE
-                    .fill(egui::Color32::from_rgb(16, 16, 16))
-                    .corner_radius(6.0)
+                    .fill(term_bg)
+                    .corner_radius(8.0)
                     .inner_margin(egui::Margin::symmetric(10, 8))
+                    .stroke(egui::Stroke::new(1.0_f32, muted.gamma_multiply(0.3)))
                     .show(ui, |ui| {
                         egui::ScrollArea::vertical()
                             .max_height(150.0)
+                            .min_scrolled_height(90.0)
                             .stick_to_bottom(true)
                             .id_salt("terminal")
                             .show(ui, |ui| {
@@ -726,14 +883,13 @@ impl eframe::App for NguoncApp {
                                             egui::RichText::new(line.text.clone())
                                                 .monospace()
                                                 .size(12.0)
-                                                .color(line.color.egui()),
+                                                .color(line.color.egui_for(dark)),
                                         )
                                         .selectable(true),
                                     );
                                 }
                             });
                     });
-
             });
 
         // Update-check dialog.
@@ -750,11 +906,11 @@ impl eframe::App for NguoncApp {
                             ui.label(msg.clone());
                         }
                         Some(Err(e)) => {
-                            ui.colored_label(egui::Color32::RED, format!("Update check failed: {e}"));
+                            ui.colored_label(red, format!("Update check failed: {e}"));
                         }
                         None => {
                             ui.spinner();
-                            ui.label("Checking GitHub releases...");
+                            ui.label("Checking GitHub releases…");
                         }
                     }
                     ui.separator();
@@ -768,6 +924,7 @@ impl eframe::App for NguoncApp {
     }
 }
 
+
 fn main() -> eframe::Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -776,8 +933,8 @@ fn main() -> eframe::Result<()> {
     let handle = rt.handle().clone();
     let icon_data = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")).ok();
     let mut viewport = egui::ViewportBuilder::default()
-        .with_inner_size([860.0, 720.0])
-        .with_min_inner_size([700.0, 600.0]);
+        .with_inner_size([920.0, 780.0])
+        .with_min_inner_size([760.0, 640.0]);
     if let Some(icon) = &icon_data {
         viewport = viewport.with_icon(std::sync::Arc::new(icon.clone()));
     }
@@ -786,7 +943,7 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "github.com/NinhGhoster/NguonC-Downloader",
+        "NguonC Downloader",
         options,
         Box::new(|cc| {
             // Be Vietnam Pro covers the Vietnamese diacritics egui's default
