@@ -2,7 +2,7 @@
 //! goes through system `curl --http2` (same approach as the Python engine —
 //! measured: Python clients get 403 from non-VN IPs while curl with the same
 //! headers gets 200).
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
@@ -57,7 +57,11 @@ fn curl_supports_http2() -> bool {
             .arg("--version")
             .output()
             .map(|o| {
-                let s = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+                let s = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&o.stdout),
+                    String::from_utf8_lossy(&o.stderr)
+                );
                 s.contains("HTTP2") || s.contains("HTTP/2")
             })
             .unwrap_or(false)

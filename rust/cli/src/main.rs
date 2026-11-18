@@ -1,5 +1,5 @@
-use anyhow::{bail, Result};
-use nguonc_core::{download, generate_filename, scrape, Progress};
+use anyhow::{Result, bail};
+use nguonc_core::{Progress, download, generate_filename, scrape};
 use std::io::Write;
 
 #[tokio::main]
@@ -24,7 +24,10 @@ async fn main() -> Result<()> {
             let parallel: usize = args.next().unwrap_or("1".into()).parse()?;
 
             let movie = scrape(&url).await?;
-            let server = movie.servers.get(server_idx).ok_or_else(|| anyhow::anyhow!("server index out of range"))?;
+            let server = movie
+                .servers
+                .get(server_idx)
+                .ok_or_else(|| anyhow::anyhow!("server index out of range"))?;
             let mut episodes: Vec<_> = server.list.iter().collect();
             if let Some(i) = only {
                 episodes = episodes.into_iter().skip(i).take(1).collect();
@@ -43,17 +46,28 @@ async fn main() -> Result<()> {
                 println!("EP {}: downloading -> {}", resolved.num, out.display());
                 let sticky = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
                 let s2 = sticky.clone();
-                download(m3u8, &out.to_string_lossy(), &referer, parallel, move |p: Progress| {
-                    if p.done != 1 && p.done % 20 != 0 && p.done != p.total {
-                        return;
-                    }
-                    let line = format!("\r  {}/{} segments ({:.0} MiB)", p.done, p.total, p.bytes as f64 / 1048576.0);
-                    let mut g = s2.lock().unwrap();
-                    g.clear();
-                    g.push_str(&line);
-                    let _ = std::io::stdout().write_all(g.as_bytes());
-                    let _ = std::io::stdout().flush();
-                })
+                download(
+                    m3u8,
+                    &out.to_string_lossy(),
+                    &referer,
+                    parallel,
+                    move |p: Progress| {
+                        if p.done != 1 && !p.done.is_multiple_of(20) && p.done != p.total {
+                            return;
+                        }
+                        let line = format!(
+                            "\r  {}/{} segments ({:.0} MiB)",
+                            p.done,
+                            p.total,
+                            p.bytes as f64 / 1048576.0
+                        );
+                        let mut g = s2.lock().unwrap();
+                        g.clear();
+                        g.push_str(&line);
+                        let _ = std::io::stdout().write_all(g.as_bytes());
+                        let _ = std::io::stdout().flush();
+                    },
+                )
                 .await?;
                 println!();
             }

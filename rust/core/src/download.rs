@@ -2,7 +2,7 @@
 //! curl (HTTP/2, browser headers), append in order to a temp file, atomic
 //! rename. No yt-dlp, no ffmpeg — avoids the entire issue #2 failure class.
 use crate::http::{self, USER_AGENT};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::io::Write;
 use std::path::Path;
 
@@ -70,16 +70,30 @@ pub async fn download(
             let _permit = sem.acquire().await?;
             let mut last_err = String::new();
             for attempt in 1..=3 {
-                match http::fetch(&seg, Some(&referer), "GET", &[("User-Agent", USER_AGENT)], None, 60).await {
+                match http::fetch(
+                    &seg,
+                    Some(&referer),
+                    "GET",
+                    &[("User-Agent", USER_AGENT)],
+                    None,
+                    60,
+                )
+                .await
+                {
                     Ok(r) if r.status == 200 && r.body.len() >= 188 => return Ok((idx, r.body)),
                     Ok(r) => last_err = format!("HTTP {} ({} bytes)", r.status, r.body.len()),
                     Err(e) => last_err = e.to_string(),
                 }
                 if attempt < 3 {
-                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64))
+                        .await;
                 }
             }
-            bail!("segment {}/{} failed after 3 attempts: {last_err}", idx + 1, total)
+            bail!(
+                "segment {}/{} failed after 3 attempts: {last_err}",
+                idx + 1,
+                total
+            )
         });
     }
 
@@ -91,7 +105,11 @@ pub async fn download(
         ordered[idx] = Some(body);
         // Report as segments land, not after the ordered write pass, so
         // progress callbacks are live during the fetch.
-        on_progress(Progress { done: completed, total, bytes: bytes_total });
+        on_progress(Progress {
+            done: completed,
+            total,
+            bytes: bytes_total,
+        });
     }
     for body in ordered.into_iter() {
         let body = body.context("missing segment")?;

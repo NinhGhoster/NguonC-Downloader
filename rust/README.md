@@ -30,7 +30,7 @@ cargo run -p nguonc-cli -- download "https://phim.nguonc.com/phim/gign-luc-luong
 # usage: download <url> <out-dir> [server-idx] [ep-idx] [parallel]
 ```
 
-GUI defaults: window 860×720 (min 700×600), output dir `~/Downloads`
+GUI defaults: window 960×640 (min 760×540), output dir `~/Downloads`
 (editable, with a native Browse… folder picker), "Create movie name
 subfolder" checkbox (default on), concurrency slider 1–8 enabled only with
 ≥2 episodes checked (matches the Python app), black terminal panel capped at

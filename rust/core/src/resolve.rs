@@ -5,17 +5,29 @@ use crate::http;
 use crate::model::{Episode, Resolved};
 use aes_gcm::aead::{Aead, Payload};
 use aes_gcm::{Aes256Gcm, Key, KeyInit, Nonce};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
+use hmac::{Hmac, Mac};
 use regex::Regex;
 use sha2::{Digest, Sha256};
-use hmac::{Hmac, Mac};
 
 const BOOTSTRAP_AAD_PREFIX: &str = "stream-bootstrap-v1\n";
 
-pub fn generate_filename(english_title: &str, title: &str, episode_num: &str, season: u32) -> String {
-    let name = if english_title.is_empty() { title } else { english_title };
-    let safe: String = name.chars().filter(|c| !matches!(c, '\\' | '/' | '*' | '?' | ':' | '"' | '<' | '>' | '|')).collect();
-    let dotted = safe.trim().split_whitespace().collect::<Vec<_>>().join(".");
+pub fn generate_filename(
+    english_title: &str,
+    title: &str,
+    episode_num: &str,
+    season: u32,
+) -> String {
+    let name = if english_title.is_empty() {
+        title
+    } else {
+        english_title
+    };
+    let safe: String = name
+        .chars()
+        .filter(|c| !matches!(c, '\\' | '/' | '*' | '?' | ':' | '"' | '<' | '>' | '|'))
+        .collect();
+    let dotted = safe.split_whitespace().collect::<Vec<_>>().join(".");
     let ep: u32 = episode_num.parse().unwrap_or(0);
     format!("{dotted}.S{season:02}E{ep:02}.mp4")
 }
@@ -23,8 +35,20 @@ pub fn generate_filename(english_title: &str, title: &str, episode_num: &str, se
 pub async fn resolve_one(ep: &Episode, movie_url: &str, season: u32) -> Resolved {
     let filename = generate_filename("", "", &ep.name, season); // filled by caller if needed
     match resolve_inner(ep, movie_url).await {
-        Ok(path) => Resolved { num: ep.name.clone(), embed: ep.embed.clone(), m3u8: Some(path), error: None, filename },
-        Err(e) => Resolved { num: ep.name.clone(), embed: ep.embed.clone(), m3u8: None, error: Some(format!("{e}")), filename },
+        Ok(path) => Resolved {
+            num: ep.name.clone(),
+            embed: ep.embed.clone(),
+            m3u8: Some(path),
+            error: None,
+            filename,
+        },
+        Err(e) => Resolved {
+            num: ep.name.clone(),
+            embed: ep.embed.clone(),
+            m3u8: None,
+            error: Some(format!("{e}")),
+            filename,
+        },
     }
 }
 
@@ -72,16 +96,17 @@ async fn resolve_inner(ep: &Episode, movie_url: &str) -> Result<String> {
         api,
         Some(embed),
         "POST",
-        &[
-            ("Content-Type", "application/json"),
-            ("Origin", &origin),
-        ],
+        &[("Content-Type", "application/json"), ("Origin", &origin)],
         Some(&body),
         30,
     )
     .await?;
     if resp.status == 429 || resp.status == 503 {
-        let retry = resp.headers.get("retry-after").map(String::as_str).unwrap_or("60");
+        let retry = resp
+            .headers
+            .get("retry-after")
+            .map(String::as_str)
+            .unwrap_or("60");
         bail!("Rate limited by embed host (retry after {retry}s)");
     }
     if resp.status != 200 {
@@ -89,7 +114,15 @@ async fn resolve_inner(ep: &Episode, movie_url: &str) -> Result<String> {
             .ok()
             .and_then(|v| v["error"].as_str().map(str::to_string))
             .unwrap_or_default();
-        bail!("HTTP {} from embed host (bootstrap{})", resp.status, if detail.is_empty() { String::new() } else { format!(": {detail}") });
+        bail!(
+            "HTTP {} from embed host (bootstrap{})",
+            resp.status,
+            if detail.is_empty() {
+                String::new()
+            } else {
+                format!(": {detail}")
+            }
+        );
     }
 
     let envelope: serde_json::Value = serde_json::from_slice(&resp.body)?;
@@ -122,8 +155,12 @@ async fn resolve_inner(ep: &Episode, movie_url: &str) -> Result<String> {
 }
 
 fn open_bootstrap(envelope: &serde_json::Value, api_href: &str) -> Result<serde_json::Value> {
-    let iv_hex = envelope["iv"].as_str().context("malformed bootstrap envelope")?;
-    let data_b64 = envelope["data"].as_str().context("malformed bootstrap envelope")?;
+    let iv_hex = envelope["iv"]
+        .as_str()
+        .context("malformed bootstrap envelope")?;
+    let data_b64 = envelope["data"]
+        .as_str()
+        .context("malformed bootstrap envelope")?;
     if iv_hex.len() != 24 || !iv_hex.chars().all(|c| c.is_ascii_hexdigit()) {
         bail!("malformed bootstrap envelope iv");
     }
@@ -134,18 +171,25 @@ fn open_bootstrap(envelope: &serde_json::Value, api_href: &str) -> Result<serde_
     let iv = hex_decode(iv_hex)?;
     let ct = base64_decode(data_b64)?;
     let pt = cipher
-        .decrypt(Nonce::from_slice(&iv), Payload { msg: &ct, aad: aad.as_bytes() })
+        .decrypt(
+            Nonce::from_slice(&iv),
+            Payload {
+                msg: &ct,
+                aad: aad.as_bytes(),
+            },
+        )
         .map_err(|_| anyhow::anyhow!("bootstrap decrypt failed"))?;
     Ok(serde_json::from_slice(&pt)?)
 }
 
 /// Playlist key: HMAC-SHA256(key=b"stream-derive-v1", msg=videoHash); no AAD.
 fn decrypt_playlist(text: &str, video_hash: &str) -> Result<String> {
+    let iv_re = Regex::new(r"iv=([0-9a-fA-F]+)")?;
     let mut iv_hex = None;
     let mut data_line = None;
     for line in text.lines() {
         if line.contains("#ENC-AESGCM") {
-            if let Some(c) = Regex::new(r"iv=([0-9a-fA-F]+)")?.captures(line) {
+            if let Some(c) = iv_re.captures(line) {
                 iv_hex = Some(c[1].to_string());
             }
         } else if !line.starts_with('#') && !line.trim().is_empty() {
@@ -159,7 +203,10 @@ fn decrypt_playlist(text: &str, video_hash: &str) -> Result<String> {
     let key = mac.finalize().into_bytes();
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
     let pt = cipher
-        .decrypt(Nonce::from_slice(&hex_decode(&iv_hex)?), base64_decode(&data_line)?.as_slice())
+        .decrypt(
+            Nonce::from_slice(&hex_decode(&iv_hex)?),
+            base64_decode(&data_line)?.as_slice(),
+        )
         .map_err(|_| anyhow::anyhow!("playlist decrypt failed"))?;
     Ok(String::from_utf8(pt)?)
 }
@@ -168,17 +215,27 @@ fn write_playlist(text: &str) -> Result<String> {
     let path = std::env::temp_dir().join(format!(
         "nguonc-{}-{}.m3u8",
         std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos()
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
     ));
     std::fs::write(&path, text)?;
     Ok(path.to_string_lossy().into_owned())
 }
 
 fn hex_decode(s: &str) -> Result<Vec<u8>> {
-    if s.len() % 2 != 0 { bail!("odd hex length") }
-    Ok((0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16)).collect::<Result<Vec<_>, _>>()?)
+    if !s.len().is_multiple_of(2) {
+        bail!("odd hex length")
+    }
+    Ok((0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16))
+        .collect::<Result<Vec<_>, _>>()?)
 }
 
 fn base64_decode(s: &str) -> Result<Vec<u8>> {
-    Ok(base64::Engine::decode(&base64::engine::general_purpose::STANDARD, s)?)
+    Ok(base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        s,
+    )?)
 }
