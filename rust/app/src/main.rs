@@ -3,6 +3,7 @@
 //! applied at the top of each frame, so UI state is never touched from a
 //! worker thread.
 use eframe::egui;
+use egui::load::SizedTexture;
 use nguonc_core::{download, generate_filename, scrape, Progress};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -110,6 +111,7 @@ struct NguoncApp {
     show_update_dialog: bool,
     last_tick: HashMap<String, Instant>,
     handle: Option<tokio::runtime::Handle>,
+    logo: Option<egui::TextureHandle>,
 }
 
 enum UiMsg {
@@ -127,7 +129,7 @@ impl Default for ThemeMode {
 }
 
 impl NguoncApp {
-    fn new(handle: tokio::runtime::Handle) -> Self {
+    fn new(handle: tokio::runtime::Handle, logo: Option<egui::TextureHandle>) -> Self {
         let output_dir = std::env::var("HOME")
             .map(|h| format!("{h}/Downloads"))
             .unwrap_or_else(|_| "downloads".to_string());
@@ -137,6 +139,7 @@ impl NguoncApp {
             subfolder: true,
             theme: ThemeMode::System,
             status: "Ready".to_string(),
+            logo: logo,
             ..Default::default()
         }
     }
@@ -491,22 +494,27 @@ impl eframe::App for NguoncApp {
         }
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(14, 10)))
+            .frame(egui::Frame::central_panel(&ctx.style()).inner_margin(egui::Margin::symmetric(14, 10)))
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
 
                 // Header: brand + theme cycle + update check.
                 ui.horizontal(|ui| {
-                    ui.heading("NguonC Downloader");
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Check for Update").clicked() {
-                            self.check_update();
-                        }
-                        if ui.button(self.theme.label()).clicked() {
-                            self.theme = self.theme.next();
-                            ctx.set_theme(self.theme.preference());
-                        }
-                    });
+                    if let Some(tex) = &self.logo {
+                        ui.add(egui::Image::from_texture(SizedTexture::from_handle(tex)));
+                    }
+                    ui.hyperlink_to(
+                        egui::RichText::new("github.com/NinhGhoster/NguonC-Downloader").strong(),
+                        "https://github.com/NinhGhoster/NguonC-Downloader",
+                    );
+                    if ui.button("Check for Update").clicked() {
+                        self.check_update();
+                    }
+                    if ui.button(self.theme.label()).clicked() {
+                        self.theme = self.theme.next();
+                        ctx.set_theme(self.theme.preference());
+                        ctx.request_repaint();
+                    }
                 });
                 ui.separator();
 
@@ -726,12 +734,6 @@ impl eframe::App for NguoncApp {
                             });
                     });
 
-                // Footer.
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                        ui.hyperlink_to("github.com/NinhGhoster/NguonC-Downloader", RELEASES_URL);
-                    });
-                });
             });
 
         // Update-check dialog.
@@ -772,14 +774,19 @@ fn main() -> eframe::Result<()> {
         .build()
         .expect("tokio runtime");
     let handle = rt.handle().clone();
+    let icon_data = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")).ok();
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([860.0, 720.0])
+        .with_min_inner_size([700.0, 600.0]);
+    if let Some(icon) = &icon_data {
+        viewport = viewport.with_icon(std::sync::Arc::new(icon.clone()));
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([860.0, 720.0])
-            .with_min_inner_size([700.0, 600.0]),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(
-        "NguonC Downloader",
+        "github.com/NinhGhoster/NguonC-Downloader",
         options,
         Box::new(|cc| {
             // Be Vietnam Pro covers the Vietnamese diacritics egui's default
@@ -798,7 +805,12 @@ fn main() -> eframe::Result<()> {
                 f.insert(0, "bevn".to_owned());
             }
             cc.egui_ctx.set_fonts(fonts);
-            Ok(Box::new(NguoncApp::new(handle)))
+            let logo = icon_data.map(|icon| {
+                let img = egui::ColorImage::from_rgba_unmultiplied(
+                    [icon.width as usize, icon.height as usize], &icon.rgba);
+                cc.egui_ctx.load_texture("logo", img, Default::default())
+            });
+            Ok(Box::new(NguoncApp::new(handle, logo)))
         }),
     )
 }
