@@ -154,6 +154,33 @@ impl NguoncApp {
         self.status_red = red;
     }
 
+    /// Kick off a scrape of the current URL, if one is present and not busy.
+    fn begin_load(&mut self) {
+        let url = self.movie_url.trim().to_string();
+        if url.is_empty() || self.loading || self.downloading {
+            return;
+        }
+        self.set_status("Loading…", false);
+        self.loading = true;
+        self.servers.clear();
+        self.english_title.clear();
+        self.vietnamese_title.clear();
+        self.terminal.clear();
+        self.ep_line.clear();
+        self.ep_progress.clear();
+        let (tx, rx) = mpsc::channel();
+        self.rx = Some(rx);
+        match self.handle.clone() {
+            Some(handle) => {
+                handle.spawn(async move {
+                    let result = scrape(&url).await.map_err(|e| e.to_string());
+                    let _ = tx.send(UiMsg::Scraped { url, result });
+                });
+            }
+            None => self.loading = false,
+        }
+    }
+
     fn push_line(&mut self, text: String, color: TermColor) {
         self.terminal.push(TermLine { text, color });
         while self.terminal.len() > 100 {
@@ -243,7 +270,7 @@ impl NguoncApp {
             UiMsg::EpProgress { ep, done, total, bytes } => {
                 self.ep_progress.insert(ep.clone(), (done, total));
                 if let Some(row) = self.find_ep_mut(&ep) {
-                    row.status = format!("downloading... {done}/{total}");
+                    row.status = format!("downloading… {done}/{total}");
                 }
                 let now = Instant::now();
                 let due = self
@@ -297,7 +324,7 @@ impl NguoncApp {
             .iter_mut()
             .filter(|e| e.checked && e.status.is_empty())
             .map(|e| {
-                e.status = "resolving...".to_string();
+                e.status = "resolving…".to_string();
                 (e.num.clone(), e.embed.clone(), e.filename.clone())
             })
             .collect();
@@ -309,7 +336,7 @@ impl NguoncApp {
         self.terminal.clear();
         self.ep_line.clear();
         self.ep_progress.clear();
-        self.set_status("Downloading...", false);
+        self.set_status("Downloading…", false);
         self.rx = Some(rx);
         self.downloading = true;
         let parallel = self.concurrency.max(1);
@@ -335,7 +362,7 @@ impl NguoncApp {
         );
         for (num, _, _) in &jobs {
             let idx = self.terminal.len();
-            self.push_line(format!("$ EP {num}: Starting..."), TermColor::Grey);
+            self.push_line(format!("$ EP {num}: Starting…"), TermColor::Grey);
             self.ep_line.insert(num.clone(), idx);
         }
         let remaining = Arc::new(AtomicUsize::new(jobs.len()));
@@ -392,7 +419,7 @@ impl NguoncApp {
         let (tx, rx) = mpsc::channel();
         self.update_rx = Some(rx);
         self.show_update_dialog = true;
-        self.set_status("Checking for updates...", false);
+        self.set_status("Checking for updates…", false);
         let Some(handle) = self.handle.clone() else { return };
         handle.spawn(async move {
             let result = async {
@@ -520,7 +547,12 @@ impl eframe::App for NguoncApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::central_panel(&ctx.style()).inner_margin(egui::Margin::symmetric(18, 14)))
             .show(ctx, |ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(10.0, 9.0);
+                // The whole column scrolls vertically: content is taller than the
+                // window at small sizes, and widgets must never be clipped away.
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
 
                 // ── Header ────────────────────────────────────────────────
                 ui.horizontal(|ui| {
@@ -565,45 +597,31 @@ impl eframe::App for NguoncApp {
 
                 // ── Movie URL ─────────────────────────────────────────────
                 ui.label(egui::RichText::new("Movie URL").size(12.0).color(muted).strong());
+                // Finite edit width: an `INFINITY` desired width makes the row's
+                // content wider than the panel (which then grows/clips), and an
+                // RTL layout places the edit's far edge off-panel.
                 ui.horizontal(|ui| {
+                    let btn_w = 110.0;
+                    let edit_w =
+                        (ui.available_width() - btn_w - ui.spacing().item_spacing.x).max(100.0);
                     let resp = ui.add(
                         egui::TextEdit::singleline(&mut self.movie_url)
                             .hint_text("https://phim.nguonc.com/phim/...")
-                            .desired_width(f32::INFINITY),
+                            .desired_width(edit_w),
                     );
+                    if self.loading {
+                        ui.spinner();
+                    }
                     if ui
                         .add_enabled(
                             !self.loading && !self.downloading,
                             egui::Button::new(egui::RichText::new("Load Movie").strong())
-                                .min_size(egui::vec2(0.0, 26.0)),
+                                .min_size(egui::vec2(btn_w, 28.0)),
                         )
                         .clicked()
                         || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                     {
-                        let url = self.movie_url.trim().to_string();
-                        if !url.is_empty() && !self.loading && !self.downloading {
-                            self.set_status("Loading...", false);
-                            self.loading = true;
-                            self.servers.clear();
-                            self.english_title.clear();
-                            self.vietnamese_title.clear();
-                            self.terminal.clear();
-                            self.ep_line.clear();
-                            self.ep_progress.clear();
-                            let (tx, rx) = mpsc::channel();
-                            self.rx = Some(rx);
-                            if let Some(handle) = self.handle.clone() {
-                                handle.spawn(async move {
-                                    let result = scrape(&url).await.map_err(|e| e.to_string());
-                                    let _ = tx.send(UiMsg::Scraped { url, result });
-                                });
-                            } else {
-                                self.loading = false;
-                            }
-                        }
-                    }
-                    if self.loading {
-                        ui.spinner();
+                        self.begin_load();
                     }
                 });
 
@@ -620,17 +638,26 @@ impl eframe::App for NguoncApp {
                 });
 
                 if self.english_title.is_empty() && self.vietnamese_title.is_empty() {
-                    ui.add_space(8.0);
+                    ui.add_space(10.0);
                     ui.vertical_centered(|ui| {
-                        ui.add_space(40.0);
+                        ui.add_space(24.0);
+                        if let Some(tex) = &self.logo {
+                            ui.add(
+                                egui::Image::from_texture(SizedTexture::from_handle(tex))
+                                    .fit_to_exact_size(egui::vec2(72.0, 72.0)),
+                            );
+                            ui.add_space(14.0);
+                        }
+                        ui.heading(egui::RichText::new("Paste a movie URL above").size(17.0));
+                        ui.add_space(4.0);
                         ui.label(
-                            egui::RichText::new("Paste a movie URL above and press Load Movie")
-                                .size(14.0)
+                            egui::RichText::new("Press Load Movie (or Enter) to fetch the episode list")
+                                .size(13.0)
                                 .color(muted),
                         );
-                        ui.add_space(6.0);
+                        ui.add_space(14.0);
                         ui.label(
-                            egui::RichText::new("Vietnamese subtitles · Direct download · No FFmpeg needed")
+                            egui::RichText::new("Direct HLS download  ·  No FFmpeg required")
                                 .size(11.0)
                                 .color(muted),
                         );
@@ -646,8 +673,11 @@ impl eframe::App for NguoncApp {
                     .corner_radius(8.0)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.heading(
-                                egui::RichText::new(self.display_title()).size(17.0).strong(),
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(self.display_title()).size(17.0).strong(),
+                                )
+                                .wrap(),
                             );
                             if !self.vietnamese_title.is_empty()
                                 && self.vietnamese_title != self.english_title
@@ -730,48 +760,65 @@ impl eframe::App for NguoncApp {
                         .corner_radius(8.0)
                         .show(ui, |ui| {
                             egui::ScrollArea::vertical()
-                                .max_height(160.0)
+                                .max_height(128.0)
                                 .id_salt("episodes")
                                 .show(ui, |ui| {
-                                    egui::Grid::new("episodes")
-                                        .num_columns(4)
-                                        .spacing([12.0, 6.0])
-                                        .show(ui, |ui| {
-                                            for chunk in server.eps.chunks_mut(4) {
-                                                for ep in chunk {
-                                                    let color = if ep.status.starts_with("fail") {
-                                                        red
-                                                    } else if ep.status.starts_with("downloading")
-                                                        || ep.status.starts_with("resolving")
-                                                    {
-                                                        amber
-                                                    } else if ep.status == "done" {
-                                                        green
-                                                    } else {
-                                                        muted
-                                                    };
-                                                    let mut checked = ep.checked;
-                                                    if ui.checkbox(&mut checked, "").changed() {
-                                                        ep.checked = checked;
-                                                    }
-                                                    let label = if ep.status.is_empty() {
-                                                        format!("EP {}", ep.num)
-                                                    } else {
-                                                        format!("EP {} · {}", ep.num, ep.status)
-                                                    };
-                                                    // "•" (U+2022) exists in all bundled fonts.
-                                                    ui.add(
-                                                        egui::Label::new(
-                                                            egui::RichText::new(format!("• {label}"))
-                                                                .size(12.0)
-                                                                .color(color),
-                                                        )
-                                                        .truncate(),
-                                                    );
+                                    for chunk in server.eps.chunks_mut(4) {
+                                        ui.horizontal(|ui| {
+                                        for ep in chunk {
+                                            let color = if ep.status.starts_with("fail") {
+                                                red
+                                            } else if ep.status.starts_with("downloading")
+                                                || ep.status.starts_with("resolving")
+                                            {
+                                                amber
+                                            } else if ep.status == "done" {
+                                                green
+                                            } else {
+                                                muted
+                                            };
+                                            // Short cell label; full text is on hover.
+                                            let short = match ep.status.split_whitespace().next() {
+                                                Some("downloading") | Some("downloading…") => {
+                                                    ep.status
+                                                        .split_whitespace()
+                                                        .nth(1)
+                                                        .unwrap_or("…")
+                                                        .to_string()
                                                 }
-                                                ui.end_row();
+                                                Some("fail:") => "fail".to_string(),
+                                                Some("resolving…") => "resolving…".to_string(),
+                                                Some(s) => s.to_string(),
+                                                None => String::new(),
+                                            };
+                                            let label = if short.is_empty() {
+                                                format!("EP {}", ep.num)
+                                            } else {
+                                                format!("EP {} · {}", ep.num, short)
+                                            };
+                                            let full = if ep.status.is_empty() {
+                                                format!("EP {}\n{}", ep.num, ep.filename)
+                                            } else {
+                                                format!("EP {} · {}\n{}", ep.num, ep.status, ep.filename)
+                                            };
+                                            let mut checked = ep.checked;
+                                            if ui.checkbox(&mut checked, "").changed() {
+                                                ep.checked = checked;
                                             }
+                                            // "•" (U+2022) exists in all bundled fonts.
+                                            ui.add_sized(
+                                                [150.0, 18.0],
+                                                egui::Label::new(
+                                                    egui::RichText::new(format!("• {label}"))
+                                                        .size(12.0)
+                                                        .color(color),
+                                                )
+                                                .truncate(),
+                                            )
+                                            .on_hover_text(full);
+                                        }
                                         });
+                                    }
                                 });
                         });
                 }
@@ -795,12 +842,16 @@ impl eframe::App for NguoncApp {
                         );
                     }
                 });
+                ui.checkbox(&mut self.subfolder, egui::RichText::new("Save into a movie-name subfolder").size(12.0));
+                // Output folder: label far left, path fills middle, Browse on the right.
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.subfolder, egui::RichText::new("Save into movie-name subfolder").size(12.0));
                     ui.label(egui::RichText::new("Output:").size(12.0).color(muted));
+                    let btn_w = 84.0;
+                    let edit_w =
+                        (ui.available_width() - btn_w - ui.spacing().item_spacing.x).max(120.0);
                     ui.add(
                         egui::TextEdit::singleline(&mut self.output_dir)
-                            .desired_width(f32::INFINITY)
+                            .desired_width(edit_w)
                             .font(egui::TextStyle::Monospace),
                     );
                     if ui.button("Browse…").clicked() {
@@ -808,7 +859,7 @@ impl eframe::App for NguoncApp {
                     }
                 });
 
-                ui.add_space(8.0);
+                ui.add_space(6.0);
 
                 // ── Download action ───────────────────────────────────────
                 ui.horizontal(|ui| {
@@ -853,7 +904,7 @@ impl eframe::App for NguoncApp {
                     );
                 }
 
-                ui.add_space(8.0);
+                ui.add_space(6.0);
 
                 // ── Terminal ──────────────────────────────────────────────
                 ui.horizontal(|ui| {
@@ -873,7 +924,7 @@ impl eframe::App for NguoncApp {
                     .show(ui, |ui| {
                         egui::ScrollArea::vertical()
                             .max_height(150.0)
-                            .min_scrolled_height(90.0)
+                            .min_scrolled_height(60.0)
                             .stick_to_bottom(true)
                             .id_salt("terminal")
                             .show(ui, |ui| {
@@ -885,12 +936,14 @@ impl eframe::App for NguoncApp {
                                                 .size(12.0)
                                                 .color(line.color.egui_for(dark)),
                                         )
-                                        .selectable(true),
+                                        .selectable(true)
+                                        .wrap(),
                                     );
                                 }
                             });
                     });
-            });
+                }); // end outer ScrollArea
+            }); // end CentralPanel
 
         // Update-check dialog.
         if self.show_update_dialog {
@@ -932,9 +985,10 @@ fn main() -> eframe::Result<()> {
         .expect("tokio runtime");
     let handle = rt.handle().clone();
     let icon_data = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")).ok();
+    // 3:2 aspect ratio, ~960x640: wide enough for the columns, not square.
     let mut viewport = egui::ViewportBuilder::default()
-        .with_inner_size([920.0, 780.0])
-        .with_min_inner_size([760.0, 640.0]);
+        .with_inner_size([960.0, 640.0])
+        .with_min_inner_size([760.0, 540.0]);
     if let Some(icon) = &icon_data {
         viewport = viewport.with_icon(std::sync::Arc::new(icon.clone()));
     }
