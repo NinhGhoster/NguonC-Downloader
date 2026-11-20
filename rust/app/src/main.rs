@@ -603,7 +603,7 @@ impl eframe::App for NguoncApp {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::central_panel(&ctx.style())
-                    .inner_margin(egui::Margin::symmetric(18, 14)),
+                    .inner_margin(egui::Margin::symmetric(20, 16)),
             )
             .show(ctx, |ui| {
                 // The whole column scrolls vertically: content is taller than the
@@ -611,23 +611,23 @@ impl eframe::App for NguoncApp {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
+                        ui.spacing_mut().item_spacing = egui::vec2(12.0, 10.0);
 
                         // ── Header ────────────────────────────────────────────────
                         ui.horizontal(|ui| {
                             if let Some(tex) = &self.logo {
                                 ui.add(
                                     egui::Image::from_texture(SizedTexture::from_handle(tex))
-                                        .fit_to_exact_size(egui::vec2(30.0, 30.0)),
+                                        .fit_to_exact_size(egui::vec2(34.0, 34.0)),
                                 );
                             }
                             ui.vertical(|ui| {
                                 ui.heading(
-                                    egui::RichText::new("NguonC Downloader").size(18.0).strong(),
+                                    egui::RichText::new("NguonC Downloader").size(20.0).strong(),
                                 );
                                 ui.hyperlink_to(
                                     egui::RichText::new("github.com/NinhGhoster/NguonC-Downloader")
-                                        .size(11.0)
+                                        .size(12.0)
                                         .color(muted),
                                     "https://github.com/NinhGhoster/NguonC-Downloader",
                                 );
@@ -642,9 +642,12 @@ impl eframe::App for NguoncApp {
                                         ThemeMode::Light => "Light",
                                     };
                                     if ui
-                                        .button(
-                                            egui::RichText::new(format!("Theme: {theme_label}"))
-                                                .size(13.0),
+                                        .add_sized(
+                                            [130.0, 30.0],
+                                            egui::Button::new(
+                                                egui::RichText::new(format!("Theme: {theme_label}"))
+                                                    .size(14.0),
+                                            ),
                                         )
                                         .on_hover_text("Click to cycle: System / Dark / Light")
                                         .clicked()
@@ -653,7 +656,10 @@ impl eframe::App for NguoncApp {
                                         ctx.set_theme(self.theme.preference());
                                         ctx.request_repaint();
                                     }
-                                    if ui.button("Check for Update").clicked() {
+                                    if ui
+                                        .add_sized([130.0, 30.0], egui::Button::new("Check for Update"))
+                                        .clicked()
+                                    {
                                         self.check_update();
                                     }
                                 },
@@ -673,7 +679,7 @@ impl eframe::App for NguoncApp {
                         // content wider than the panel (which then grows/clips), and an
                         // RTL layout places the edit's far edge off-panel.
                         ui.horizontal(|ui| {
-                            let btn_w = 110.0;
+                            let btn_w = 120.0;
                             let edit_w =
                                 (ui.available_width() - btn_w - ui.spacing().item_spacing.x)
                                     .max(100.0);
@@ -689,7 +695,7 @@ impl eframe::App for NguoncApp {
                                 .add_enabled(
                                     !self.loading && !self.downloading,
                                     egui::Button::new(egui::RichText::new("Load Movie").strong())
-                                        .min_size(egui::vec2(btn_w, 28.0)),
+                                        .min_size(egui::vec2(120.0, 32.0)),
                                 )
                                 .clicked()
                                 || (resp.lost_focus()
@@ -704,42 +710,32 @@ impl eframe::App for NguoncApp {
                         ui.horizontal(|ui| {
                             // Painted dot: guaranteed to render regardless of font coverage.
                             let (rect, _resp) = ui
-                                .allocate_exact_size(egui::vec2(10.0, 14.0), egui::Sense::hover());
-                            ui.painter().circle_filled(rect.center(), 4.0, sc);
+                                .allocate_exact_size(egui::vec2(12.0, 16.0), egui::Sense::hover());
+                            ui.painter().circle_filled(rect.center(), 4.5, sc);
                             ui.add(egui::Label::new(
-                                egui::RichText::new(&self.status).size(12.0).color(sc),
+                                egui::RichText::new(&self.status).size(13.0).color(sc),
                             ));
                         });
 
                         if self.english_title.is_empty() && self.vietnamese_title.is_empty() {
-                            ui.add_space(10.0);
+                            ui.add_space(20.0);
                             ui.vertical_centered(|ui| {
-                                ui.add_space(24.0);
+                                ui.add_space(30.0);
                                 if let Some(tex) = &self.logo {
                                     ui.add(
                                         egui::Image::from_texture(SizedTexture::from_handle(tex))
-                                            .fit_to_exact_size(egui::vec2(72.0, 72.0)),
+                                            .fit_to_exact_size(egui::vec2(100.0, 100.0)),
                                     );
-                                    ui.add_space(14.0);
+                                    ui.add_space(20.0);
                                 }
                                 ui.heading(
-                                    egui::RichText::new("Paste a movie URL above").size(17.0),
+                                    egui::RichText::new("Paste a movie URL above").size(19.0),
                                 );
-                                ui.add_space(4.0);
+                                ui.add_space(8.0);
                                 ui.label(
-                                    egui::RichText::new(
-                                        "Press Load Movie (or Enter) to fetch the episode list",
-                                    )
-                                    .size(13.0)
-                                    .color(muted),
-                                );
-                                ui.add_space(14.0);
-                                ui.label(
-                                    egui::RichText::new(
-                                        "Direct HLS download  ·  No FFmpeg required",
-                                    )
-                                    .size(11.0)
-                                    .color(muted),
+                                    egui::RichText::new("Press Load Movie (or Enter) to fetch the episode list")
+                                        .size(14.0)
+                                        .color(muted),
                                 );
                             });
                             return;
@@ -749,8 +745,8 @@ impl eframe::App for NguoncApp {
 
                         // ── Movie info card ───────────────────────────────────────
                         egui::Frame::group(ui.style())
-                            .inner_margin(egui::Margin::symmetric(12, 10))
-                            .corner_radius(8.0)
+                            .inner_margin(egui::Margin::symmetric(14, 12))
+                            .corner_radius(10.0)
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.add(
@@ -847,11 +843,11 @@ impl eframe::App for NguoncApp {
                             });
 
                             egui::Frame::group(ui.style())
-                                .inner_margin(egui::Margin::symmetric(8, 8))
-                                .corner_radius(8.0)
+                                .inner_margin(egui::Margin::symmetric(10, 10))
+                                .corner_radius(10.0)
                                 .show(ui, |ui| {
                                     egui::ScrollArea::vertical()
-                                        .max_height(128.0)
+                                        .max_height(150.0)
                                         .id_salt("episodes")
                                         .show(ui, |ui| {
                                             for chunk in server.eps.chunks_mut(4) {
@@ -913,7 +909,7 @@ impl eframe::App for NguoncApp {
                                                         }
                                                         // "•" (U+2022) exists in all bundled fonts.
                                                         ui.add_sized(
-                                                            [150.0, 18.0],
+                                                            [160.0, 24.0],
                                                             egui::Label::new(
                                                                 egui::RichText::new(format!(
                                                                     "• {label}"
@@ -992,8 +988,8 @@ impl eframe::App for NguoncApp {
                                     .color(egui::Color32::WHITE),
                             )
                             .fill(if can_download { accent } else { muted })
-                            .corner_radius(6.0)
-                            .min_size(egui::vec2(180.0, 36.0));
+                            .corner_radius(8.0)
+                            .min_size(egui::vec2(200.0, 40.0));
                             if ui.add_enabled(can_download, btn).clicked() {
                                 self.start_download();
                             }
@@ -1026,7 +1022,7 @@ impl eframe::App for NguoncApp {
                             ui.add(
                                 egui::ProgressBar::new(frac)
                                     .text(format!("{done} / {total} segments"))
-                                    .desired_height(10.0),
+                                    .desired_height(12.0),
                             );
                         }
 
@@ -1049,13 +1045,13 @@ impl eframe::App for NguoncApp {
                         });
                         egui::Frame::NONE
                             .fill(term_bg)
-                            .corner_radius(8.0)
-                            .inner_margin(egui::Margin::symmetric(10, 8))
+                            .corner_radius(10.0)
+                            .inner_margin(egui::Margin::symmetric(12, 10))
                             .stroke(egui::Stroke::new(1.0_f32, muted.gamma_multiply(0.3)))
                             .show(ui, |ui| {
                                 egui::ScrollArea::vertical()
-                                    .max_height(150.0)
-                                    .min_scrolled_height(60.0)
+                                    .max_height(160.0)
+                                    .min_scrolled_height(70.0)
                                     .stick_to_bottom(true)
                                     .id_salt("terminal")
                                     .show(ui, |ui| {
