@@ -60,7 +60,9 @@ async fn resolve_inner(ep: &Episode, movie_url: &str) -> Result<String> {
     let parsed = url::Url::parse(embed)?;
     let origin = format!("{}://{}", parsed.scheme(), parsed.host_str().unwrap_or(""));
 
-    let shell = http::fetch(embed, Some(movie_url), "GET", &[], None, 30).await?;
+    // VPN round-trips to the VN-only embed host can be slow; 45s leaves
+    // headroom over curl's default while still failing fast on a dead link.
+    let shell = http::fetch(embed, Some(movie_url), "GET", &[], None, 45).await?;
     if shell.status != 200 {
         bail!("HTTP {} from embed host", shell.status);
     }
@@ -98,7 +100,7 @@ async fn resolve_inner(ep: &Episode, movie_url: &str) -> Result<String> {
         "POST",
         &[("Content-Type", "application/json"), ("Origin", &origin)],
         Some(&body),
-        30,
+        45,
     )
     .await?;
     if resp.status == 429 || resp.status == 503 {
@@ -138,7 +140,7 @@ async fn resolve_inner(ep: &Episode, movie_url: &str) -> Result<String> {
     let playlist_url = opened["preissued"]["playlist"]
         .as_str()
         .context("Bootstrap response has no preissued playlist")?;
-    let pl = http::fetch(playlist_url, Some(embed), "GET", &[], None, 30).await?;
+    let pl = http::fetch(playlist_url, Some(embed), "GET", &[], None, 45).await?;
     if pl.status != 200 {
         bail!("HTTP {} fetching playlist", pl.status);
     }

@@ -149,10 +149,15 @@ pub async fn fetch(
     let _ = fs::remove_file(&body_path).await;
     let _ = fs::remove_file(&head_path).await;
     if !out.status.success() {
-        bail!(
-            "curl failed for {url}: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        // curl exit 28 = timeout (-m). Make it actionable instead of the raw
+        // "Operation timed out" string.
+        if out.status.code() == Some(28) {
+            bail!(
+                "Request timed out after {timeout}s ({url}) — the site may be slow or your VPN connection dropped; check VPN Vietnam and retry"
+            );
+        }
+        bail!("curl failed for {url}: {err}");
     }
     Ok(Response {
         status,

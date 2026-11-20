@@ -645,8 +645,10 @@ impl eframe::App for NguoncApp {
                                         .add_sized(
                                             [130.0, 30.0],
                                             egui::Button::new(
-                                                egui::RichText::new(format!("Theme: {theme_label}"))
-                                                    .size(14.0),
+                                                egui::RichText::new(format!(
+                                                    "Theme: {theme_label}"
+                                                ))
+                                                .size(14.0),
                                             ),
                                         )
                                         .on_hover_text("Click to cycle: System / Dark / Light")
@@ -657,7 +659,10 @@ impl eframe::App for NguoncApp {
                                         ctx.request_repaint();
                                     }
                                     if ui
-                                        .add_sized([130.0, 30.0], egui::Button::new("Check for Update"))
+                                        .add_sized(
+                                            [130.0, 30.0],
+                                            egui::Button::new("Check for Update"),
+                                        )
                                         .clicked()
                                     {
                                         self.check_update();
@@ -733,9 +738,11 @@ impl eframe::App for NguoncApp {
                                 );
                                 ui.add_space(8.0);
                                 ui.label(
-                                    egui::RichText::new("Press Load Movie (or Enter) to fetch the episode list")
-                                        .size(14.0)
-                                        .color(muted),
+                                    egui::RichText::new(
+                                        "Press Load Movie (or Enter) to fetch the episode list",
+                                    )
+                                    .size(14.0)
+                                    .color(muted),
                                 );
                             });
                             return;
