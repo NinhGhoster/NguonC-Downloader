@@ -31,19 +31,25 @@ cargo run -p nguonc-cli -- download "https://phim.nguonc.com/phim/gign-luc-luong
 ```
 
 GUI defaults: window 960×640 (min 760×540), output dir `~/Downloads`
-(editable, with a native Browse… folder picker), "Create movie name
+(editable, with a native Browse… folder picker), "Save into a movie-name
 subfolder" checkbox (default on), concurrency slider 1–8 enabled only with
-≥2 episodes checked (matches the Python app), black terminal panel capped at
+≥2 episodes checked (matches the Python app), terminal panel capped at
 100 lines with in-place per-episode progress lines (0.3 s throttle) plus an
 overall segment progress bar while downloading.
 
 Feature parity with the Python GUI: theme toggle (System → Dark → Light),
 status bar, English-title display (falls back to the Vietnamese title),
-`{year} | {n} episodes` subtitle, Select All / Deselect All, 4-column
-episode grid, and the GitHub footer link. The Rust GUI also adds a
-**Check for Update** button (the Python app never had one — only the footer
-link): it compares this build's date against the latest GitHub release tag
-(`YYYY.MM.DD`) and shows a modal with a link to the releases page.
+year/episode/server summary card, Select All / Deselect All, 4-column
+episode grid (hover a cell for full status + filename), and the repo link
+in the header. The Rust GUI also adds a **Check for Update** button (the
+Python app never had one — only the footer link): it compares this build's
+date against the latest GitHub release tag (`YYYY.MM.DD`) and shows a modal
+with a link to the releases page.
+
+Verify a change: `cargo fmt && cargo clippy --workspace --all-targets &&
+cargo build --release --workspace` (no test suite; scrape via the CLI works
+without VPN, resolve/download need it). The GUI binary users run is
+`target/release/nguonc-app` — always rebuild `--release`.
 
 Be Vietnam Pro is embedded (`app/assets/BeVietnamPro-Regular.ttf`) so
 Vietnamese diacritics in movie titles render correctly.
@@ -61,7 +67,9 @@ download time — switching servers costs nothing until you download.
 Scrape works without VPN; resolve/download need the VN VPN (embed host is
 VN-only). Per-episode failures (`Rate limited`, `Turnstile verification
 required`, Cloudflare 403, `wrong_origin`) are site responses, not code bugs —
-they surface in the terminal panel.
+they surface in the terminal panel. Connection resets/timeouts from the embed
+host mean the VPN is off or slow: bootstrap requests allow 45 s and report
+"Request timed out … check VPN Vietnam and retry"; segments retry 3× at 60 s.
 
 ## Differences vs. Python
 

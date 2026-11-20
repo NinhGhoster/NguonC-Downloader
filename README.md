@@ -68,6 +68,20 @@ sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev xvfb
 xvfb-run uv run flet pack nguonc_app.py --name "NguonC Downloader"
 ```
 
+## Rust version (branch `rust`)
+
+A native Rust port lives in [`rust/`](rust/) on the `rust` branch — same engine protocol, no Python/yt-dlp/ffmpeg at all (HTTP/2 via system `curl`, segments concatenated directly). Single ~9 MB binary vs 46–135 MB Python bundles.
+
+```bash
+git checkout rust
+cd rust
+cargo build --release --workspace
+./target/release/nguonc-app        # GUI
+./target/release/nguonc scrape <movie-url>   # CLI (scrape works without VPN)
+```
+
+See [`rust/README.md`](rust/README.md) for details. Resolve/download require a Vietnam IP (VPN); the embed host is VN-only. The Python app on `main` remains the shipped release until the Rust brand is verified.
+
 ## Project Structure
 
 ```

@@ -1,121 +1,30 @@
 # AGENTS.md — NguonC Downloader
 
-## Entrypoints
+Two brands in one repo: **Python/Flet app on `main`** (shipped), **Rust port on branch `rust`** (in testing; ships after user verifies with VPN Vietnam). Don't mix them: Python files at repo root, Rust workspace in `rust/`.
 
-- `nguonc_app.py` — Flet GUI (`uv run nguonc_app.py`)
-- `nguonc_downloader.py` — engine: scrape → bootstrap/`data-obf` resolve → decrypt m3u8 → bundled `yt_dlp`
+## Python (main)
 
-```bash
-uv sync          # CI uses: uv sync --frozen
-uv run nguonc_app.py
-```
+- Entrypoints: `nguonc_app.py` (Flet GUI), `nguonc_downloader.py` (engine: scrape → bootstrap → decrypt m3u8 → bundled yt_dlp).
+- Commands: `uv sync` (CI: `--frozen`), `uv run nguonc_app.py`. Always `uv run python` — system python3 lacks deps. No test suite/linter; verify with `uv run python -m py_compile nguonc_downloader.py nguonc_app.py` plus a live scrape/resolve script (see git history of this file for the full snippet).
+- `flet` pinned `==0.86.5`: `flet build` installs `project.dependencies` ignoring `uv.lock`; loose ranges shipped flet 1.x against 0.86.5 source. Flet 0.86.5 quirks: read-only `page.clipboard` (use pbcopy/clip/xclip), `ft.Padding` not `padding.symmetric`, `page.show_dialog(ft.SnackBar)`, `ft.Border.all`, `ft.run(func)`; **no main-thread marshaling** — worker-thread UI must go through `loop.call_soon_threadsafe` (`ui()` helper), else `ObjectPatch` IndexError races.
+- macOS build: `bash build_macos.sh` → `flet build macos --arch arm64` (needs full Xcode, not CLT), patches Info.plist then **must ad-hoc re-sign** (`codesign --force --deep --sign -`) or Gatekeeper says "app is damaged". Windows/Linux CI: `flet pack`. Flutter 3.44.8 auto-installed to `~/flutter/3.44.8`.
+- `[tool.flet.flutter.pubspec.dependency_overrides]` forces `jni: ^1.1.0` — flet 0.86.5 template pins jni 1.0.0 which breaks every platform build (Dart const-eval assertion). Check this pin first on `generated_plugin.dart` failures.
+- CI `.github/workflows/build.yml`: tag push (`YYYY.MM.DD`), PR, manual. Release job only on tags. Python-only — no Rust jobs yet.
 
-Python `>=3.10` (CI: 3.12). Runtime deps in `[project]`; `flet-cli` / `pyinstaller` are dev-group but installed by default `uv sync`. No external yt-dlp binary. **`flet` is pinned `==0.86.5`** — `flet build` converts `project.dependencies` → requirements and installs them into the bundle **ignoring `uv.lock`**; a loose `>=` range shipped flet 1.x while source ran 0.86.5 (two site-packages trees in serious_python: outer = runtime, `app/.venv` = leftover).
+## Site protocol (both engines; regex-based against live HTML that changes without notice)
 
-## Verify (no test suite / linter / typecheck)
+- Episodes: movie page `data-episode-url="…/episodes"` → JSON `{"servers":[{"name","list":[{name,slug,embed}]}]}`. Legacy inline `nc-episode-data` / `var episodes` are fallbacks. Year: `https://phim.nguonc.com/api/film/{slug}` (category `Năm`).
+- Embed host `embed*.streamc.xyz` is Cloudflare-fronted, **VN-only, hard-blocks HTTP/1.1 (403)** — must use HTTP/2 (`curl --http2`; Python falls back to `httpx[http2]` if curl lacks h2). Flow: GET embed shell → `<script id="stream-bootstrap">{"api":…}` → POST api with JSON body + **`Origin: <embed origin>`** (missing → 403 `wrong_origin`) → AES-GCM envelope, key=AAD=`SHA-256(b"stream-bootstrap-v1\n"+api_href)` → `preissued.playlist` (4h TTL) → `#ENC-AESGCM` playlist, key=`HMAC-SHA256(b"stream-derive-v1", videoHash)`, 12-byte IV from tag, no AAD.
+- Expected per-episode failures (report, don't "fix"): Cloudflare 403 (no h2), `wrong_origin`, `Rate limited … retry after Ns` (~20 bootstrap grants/hour/IP), `Turnstile verification required`. **No captcha solving, no cloudscraper, no browser/CDP extraction.** Connection reset / timeout from embed host without VN VPN is network, not code.
+- CDN segments (`jps*.hihihoho4.top` etc., `.html`/`.png` names are MPEG-TS): allow HTTP/1.1; `Referer` must be the **embed URL**; never set `Accept-Encoding` (gzip corruption). CDN 403s Python TLS fingerprints from non-VN IPs while curl gets 200 — test curl before touching resolver.
+- Python download: yt-dlp needs `extractor_args={"generic":{"is_live":["false"]}}` or ffmpeg HLS downloader is chosen and dies on `.png` segments (exit 183, "downloaded file is empty"). **Never bundle/require ffmpeg.** Existing output <1 KB = failed, re-download.
 
-```bash
-uv run python -m py_compile nguonc_downloader.py nguonc_app.py
-uv run python -c "
-from nguonc_downloader import NguoncDownloader
-d = NguoncDownloader('https://phim.nguonc.com/phim/gign-luc-luong-tinh-nhue')
-info = d.scrape()
-res = d.resolve_all_m3u8(0)
-assert info['servers'] and res
-available = sum(1 for r in res if r['m3u8'])
-assert all(r['m3u8'] or r.get('error') for r in res)
-print('OK', info['title'], info['year'], f'{available}/{len(res)} streams')
-for r in res:
-    if not r['m3u8']:
-        print('UNAVAILABLE', r['num'], r['error'])
-"
-```
+## Rust (branch `rust`, workspace `rust/`)
 
-Scraper/resolver are regex-based against **live** HTML that changes without notice — after any resolver change, re-run against real pages. Expected per-episode failures (report; do not treat as missing URLs): Cloudflare `HTTP 403` (no h2/curl), `wrong_origin` (missing `Origin`), `Rate limited ... retry after Ns` (≈20 bootstrap grants/hour/IP — wait it out), `Turnstile verification required` (no preissued grant; no captcha solving is implemented).
-
-Always run checks via `uv run python` (or `.venv/bin/python`) — the system `python3` has none of the deps. Add `uv lock --check` when `pyproject.toml` changes.
-
-## Building / CI
-
-| Platform | Command | Output |
-|----------|---------|--------|
-| macOS | `bash build_macos.sh` | `dist/NguonC Downloader.app` → CI wraps `.dmg` |
-| Windows | `uv run flet pack nguonc_app.py --name "NguonC Downloader" --icon assets/icon.ico` | `.exe` |
-| Linux | `xvfb-run uv run flet pack nguonc_app.py --name "NguonC Downloader" --icon assets/icon.png` | renamed `.bin` |
-
-- `build_macos.sh` (macOS only): `uv run flet build macos --yes --arch arm64 --python-version 3.12 … -o dist`, patches `CFBundleName`/`CFBundleDisplayName`, then **ad-hoc re-signs** (`codesign --force --deep --sign -`) — patching Info.plist after Xcode signs invalidates the seal and Gatekeeper reports "app is damaged". Normalizes to `dist/NguonC Downloader.app`. Users still need right-click → Open (or `xattr -cr`) for quarantine; no Apple Developer ID/notarization. `--arch arm64` skips the default x86_64 pass (local Rust/`xcrun` link fails with CLT-only; CI runner is arm64). **Local builds need full Xcode** (`xcodebuild`); Command Line Tools alone fails Flutter’s macOS build. macOS no longer uses `flet pack` (PyInstaller onefile is deprecated on macOS; events may not reach the handler in packed builds). `[tool.flet]` / `[tool.flet.macos]` in `pyproject.toml` supply product/description/org. Flutter **3.44.8** is auto-installed under `~/flutter/3.44.8` (CI caches `~/flutter`, key `flutter-${{ runner.os }}-3.44.8`; `timeout-minutes: 45`).
-- Windows/Linux CI still use `flet pack`.
-- Runtime also patches `sys._MEIPASS/Flet.app` plist (`main()` in `nguonc_app.py`) when packed.
-- CI: `.github/workflows/build.yml` — tag push (`*`), PR, or manual. Python 3.12, `uv sync --frozen`. Release job runs **only on tags** (`softprops/action-gh-release`). Tags: `YYYY.MM.DD` (force-push to move; new tag for a new day is fine). macOS release = `.dmg` via `build_macos.sh` (ad-hoc re-sign after Info.plist patch — otherwise Gatekeeper “app is damaged”).
-- Icons: `assets/icon.png` source; `icon.icns` / `icon.ico` already committed for pack.
-- `[tool.flet.flutter.pubspec.dependency_overrides]` in `pyproject.toml` overrides flet's build-template pubspec pins. Currently forces `jni: ^1.1.0`: flet 0.86.5's template pins `jni: 1.0.0`, but current `jni_flutter` / `shared_preferences_android` expect `^1.1.0` → Dart constant-eval assertion fails and **every** platform build breaks (seen 2026-11-13). If a future build fails in `generated_plugin.dart` / `messages.g.jni.dart`, check this pin first.
-
-## Flet quirks (locked 0.86.5)
-
-- `page.clipboard` is **read-only** — use `pbcopy` / `clip` / `xclip` subprocess.
-- `page.scroll = ft.ScrollMode.AUTO` (not `ADAPTIVE`).
-- No `ft.padding.symmetric()` — use `ft.Padding(...)`.
-- `page.show_dialog(ft.SnackBar(...))`, not `page.snack_bar =`.
-- `ft.Border.all(...)` not `ft.border.all(...)`.
-- `ft.run(func)` — pass a function reference (`NguoncApp().build`), not an instance.
-- **No main-thread marshaling API** (`page.run_thread` / `run_on_main` do not exist). `control.update()` from a worker thread races flet’s patch/diff (`on_app_lifecycle_state_change` → `__auto_update` → `ObjectPatch._compare_lists` → `IndexError`). Fix: `build()` captures `asyncio.get_running_loop()`; all worker-thread UI work goes through `loop.call_soon_threadsafe` (the `ui(fn)` helper). Never touch controls from worker threads.
-
-## Architecture
-
-`_fetch()` uses verified TLS (`_SECURE_CTX`); `INSECURE_HOSTS` is empty allowlist for `SSLCertVerificationError` only — never add a host without probing live.
-
-### Episode data
-
-**Primary (site redesign 2026-09-24):** movie page has `data-episode-url="…/phim/{slug}/episodes"`; GET it (JSON) → `{"servers":[{"name","list":[{name,slug,embed}]}]}`. Inline `id="nc-episode-data">[{...}]` and `var episodes = [...]` are **legacy fallbacks** (no longer present in HTML). `{url}/episodes` as last resort. Server key `name` (was `server_name`); episode: `name`/`slug`/`embed`. Year: `https://phim.nguonc.com/api/film/{slug}` (category `Năm`), slug via `_extract_slug()`, HTML regex fallbacks.
-
-### m3u8 resolution
-
-**Primary (live ~2026-09): HTTP/2 bootstrap POST.** Embed host (`embed*.streamc.xyz`) is behind Cloudflare and **hard-blocks HTTP/1.1 with 403** — urllib cannot negotiate h2, so embed traffic goes through system `curl --http2` (`_curl_fetch`; curl ships with macOS / Win10+ / Linux). If the system curl **lacks HTTP/2** (`curl --http2 …` → "installed libcurl version does not support this"), fall back to `httpx` with `http2=True` (requires `httpx[http2]` / `h2`). `_curl_supports_http2()` probes once and caches; `_can_h2()` is the gate for bootstrap attempts. Flow (from the player’s own public JS):
-
-1. `GET embed.php?hash=...` (h2) → shell HTML with `<script id="stream-bootstrap" type="application/json">{"api":"<embed url>"}</script>` (no `data-obf` on these pages).
-2. `POST` that `api` URL (h2): `Content-Type: application/json`, **`Origin: <embed origin>`** (missing → `403 {"error":"wrong_origin"}`), `Referer: <embed url>`; body `{"action":"bootstrap","referrer":<movie url>,"frame_origins":[<movie origin>],"request_grant":true,"playlist_format":"aesgcm-v2","pretty_url":true,"path_chunks":true,"bootstrap_format":"aesgcm-v1"}`. No cookies (`credentials` omitted).
-3. Response: AES-GCM envelope `{format:"aesgcm-v1", iv:<24-hex>, data:<b64>}`. Decrypt with key = AAD = `SHA-256(b"stream-bootstrap-v1\n" + api_href)` (`_open_bootstrap`). Plaintext: `video` (hash), `nonce`, `preissued.playlist` (signed URL, 4h TTL), `turnstileEnabled`.
-4. `GET preissued.playlist` (h2, `Referer: <embed url>`) → `#ENC-AESGCM` playlist → decrypt → temp `.m3u8` (`delete=False` — leftovers in `$TMPDIR` until manually cleaned).
-
-`429`/`503` + `Retry-After` → per-episode `Rate limited by embed host (retry after Ns)`.
-
-**Legacy fallback only** when curl is missing or shell has no bootstrap script (`_NoBootstrap`): `data-obf` → `{"sUb","hD"}` → `{embed_domain}/{sUb}.m3u8`. `resolve_stream_url()` is this legacy path only.
-
-`resolve_all_m3u8()`: `ThreadPoolExecutor`, 8 workers; per episode = shell GET + bootstrap POST + playlist GET.
-
-### Encrypted playlist decrypt
-
-If body contains `#ENC-AESGCM;iv=<12-byte-hex>` + base64 line (plaintext vs encrypted depends on UA/path; code decrypts only when the tag is present):
-
-- Key: `HMAC-SHA256(key=b"stream-derive-v1", msg=videoHash)` → AES-256 key. Constant is fixed in player.js — no per-episode variation.
-- `videoHash` = bootstrap `video` (primary) or `data-obf` `hD` (legacy).
-- AES-256-GCM, 12-byte IV from the tag, **no AAD**. `#EXT-X-B65:0-138` is metadata only — not AAD.
-
-### CDN segments
-
-TS on `jps*.hihihoho4.top` (also seen `sings*.amass2.top`, `cyin1.sbs`); `.html`/`.png` extensions are still MPEG-TS. CDN allows HTTP/1.1; only the embed host needs h2.
-
-- Segment `Referer` must be the **embed URL** (`download_episode(..., referer=ep["embed"])`).
-- Do **not** set `Accept-Encoding` in `http_headers` — fragments arrive gzip-corrupted.
-- The CDN can distinguish clients by TLS fingerprint: from a non-VN network it 403s Python clients (`urllib` / `requests` / `httpx`) while `curl` with the same headers gets 200. With a VN IP, yt-dlp's native downloader works fine. So a segment 403 may be network/VPN, not a code bug — test both `curl` and `yt_dlp`'s `urlopen` before touching the resolver.
-- `download_multiple`’s `referer` parameter is currently **unused** (always uses `ep["embed"]`).
-
-### Download
-
-Decrypted playlist → temp file; yt-dlp with `enable_file_urls` for local `file://`. `cryptography` required for AES-GCM.
-
-**Must pass `extractor_args={"generic": {"is_live": ["false"]}}`.** yt-dlp’s generic extractor flags a local m3u8 as *live* when it can’t determine a VOD duration, which forces the **ffmpeg** HLS downloader. ffmpeg refuses this CDN’s segment URLs outright — `.png` names aren’t in its `allowed_segment_extensions` → `exit 183` → `The downloaded file is empty` (issue #2; e.g. `cyin1.sbs` hosts). With `is_live=false`, yt-dlp uses its native (urllib) HLS downloader, which fetches the segments fine.
-
-Do **not** require or bundle `ffmpeg`: nothing in a `flet pack` / `flet build` bundle includes an ffmpeg binary, and the native HLS path needs none. (Issue #2’s proposed patch added an ffmpeg+ffprobe remux; rejected for that reason.)
-
-`The downloaded file is empty` has two separate causes — check which before changing code: (1) ffmpeg FD was selected (is_live flag missing), (2) segments return HTTP 403 (network/VPN — see CDN segments above).
-
-Also, `download_multiple` treats an existing output <1 KB as a failed download and re-downloads (a dead ffmpeg run can leave a zero-byte file behind).
-
-## UI
-
-- Episode rows: `ft.Row([ft.Checkbox(data=ep), ft.Text(...)])` — checkbox is `controls[0]`.
-- Concurrency is **per-episode** (`download_multiple(parallel=N)`); yt-dlp `concurrent_fragments` stays at default 1. Slider 1–8 default 1, disabled unless ≥2 checked — `refresh_concurrency_state()` from checkbox `on_change`, Select/Deselect All, and resolve rebuild.
-- Terminal panel: in-place line per episode, throttle 0.3s (`last_progress_tick`), history cap 100, cleared each download. No log file / copy / clear buttons. Callbacks fire from pool threads → marshal via `ui()`.
-- `download_multiple` contract: `on_episode_done(ep, success, error)` — error is a **positional** 3rd arg (`""` on success and on skip-existing); handlers must accept it on every branch.
-- Resolve results can go stale if the user re-selects a server: `update_episodes` bumps `self._resolve_seq` and drops out-of-date worker results — keep that guard when touching resolve UI.
+- Crates: `core` (engine, no yt-dlp/ffmpeg — curl h2 + direct segment concat), `cli` (`nguonc`, scripted verification), `app` (`nguonc-app`, egui/eframe 0.32 GUI).
+- Verify: `cd rust && cargo fmt && cargo clippy --workspace --all-targets && cargo build --release --workspace`. No tests yet. Live check: `./target/release/nguonc scrape <url>` works without VPN; `download <url> <out> <server-idx> <ep-idx> <parallel>` needs VN VPN.
+- User runs `rust/target/release/nguonc-app` — always rebuild `--release` after GUI changes.
+- Resolves m3u8 **at download time only** (Python resolves on server select, burning grants).
+- egui gotchas (learned the hard way): `ScrollArea::vertical().auto_shrink([false,false])` **expands to widest child** — never put `desired_width(f32::INFINITY)` widgets or unwrapped labels inside; use finite widths (`available_width - button - spacing`). Fonts: Be Vietnam Pro embedded for Vietnamese; only `•`, `…`, `·` are safe punctuation glyphs (no ◐ ☾ ☀ ●). Worker results → mpsc → applied at top of `update()`, never touch UI from tasks.
+- GUI screenshot verification without assistive access: launch app, find window id via Quartz (`CGWindowListCopyWindowInfo`, owner `nguonc-app`, name "NguonC Downloader"; temp venv with pyobjc-framework-Quartz), then `screencapture -x -o -l <id> out.png` works even occluded. Window may sit on a secondary display at negative coords.
+- `BUILD_DATE` const in `rust/app/src/main.rs` (YYYYMMDD) drives Check-for-Update vs latest GitHub release tag — bump on release builds.
