@@ -345,10 +345,14 @@ impl NguoncApp {
         let Some(server) = self.servers.get_mut(self.selected_server) else {
             return;
         };
+        // Retryable: any checked episode that is not already done. The old
+        // filter (`status.is_empty()`) silently skipped failed episodes —
+        // after a failure `status` is "fail: …", so Download Selected did
+        // nothing for them and gave no feedback.
         let jobs: Vec<(String, String, String)> = server
             .eps
             .iter_mut()
-            .filter(|e| e.checked && e.status.is_empty())
+            .filter(|e| e.checked && e.status != "done")
             .map(|e| {
                 e.status = "resolving…".to_string();
                 (e.num.clone(), e.embed.clone(), e.filename.clone())
@@ -367,8 +371,18 @@ impl NguoncApp {
         self.set_status("Downloading…", false);
         self.rx = Some(rx);
         self.downloading = true;
-        let parallel = self.concurrency.max(1);
+        // The slider is *episode* concurrency (matching the Python app):
+        // at most this many episodes resolve/download at once. Segment
+        // fetches inside one episode use a fixed parallelism of 4 (the
+        // value verified live in rust/README.md). Previously every episode
+        // task spawned at once and `parallel` was passed per-episode as
+        // segment parallelism, so total curl processes were
+        // episodes × parallel, unbounded.
+        let episode_semaphore =
+            std::sync::Arc::new(tokio::sync::Semaphore::new(self.concurrency.max(1)));
         let movie_url = self.loaded_url.clone();
+        let english_title = self.english_title.clone();
+        let vietnamese_title = self.vietnamese_title.clone();
         let mut out_dir = self.output_dir.trim().to_string();
         if out_dir.is_empty() {
             out_dir = std::env::var("HOME")
@@ -388,8 +402,9 @@ impl NguoncApp {
         }
         self.push_line(
             format!(
-                "$ Episodes: {}, Parallel: {parallel}, Output: {out_dir}",
-                jobs.len()
+                "$ Episodes: {}, Concurrent episodes: {}, Output: {out_dir}",
+                jobs.len(),
+                self.concurrency.max(1)
             ),
             TermColor::Grey,
         );
@@ -403,55 +418,76 @@ impl NguoncApp {
         for (num, embed, filename) in jobs {
             let tx = tx.clone();
             let movie_url = movie_url.clone();
+            let english_title = english_title.clone();
+            let vietnamese_title = vietnamese_title.clone();
             let out_dir = out_dir.clone();
             let remaining = remaining.clone();
+            let episode_semaphore = episode_semaphore.clone();
             handle.spawn(async move {
+                // Hold an episode slot for the whole resolve + download,
+                // so at most `concurrency` episodes run at once.
+                let Ok(_permit) = episode_semaphore.acquire_owned().await else {
+                    return;
+                };
                 let ep = nguonc_core::Episode {
                     name: num.clone(),
                     slug: None,
                     embed,
                 };
-                let resolved = nguonc_core::resolve::resolve_one(&ep, &movie_url, 1).await;
-                if let Some(err) = resolved.error {
-                    let _ = tx.send(UiMsg::EpDone {
-                        ep: num,
-                        ok: false,
-                        err,
-                    });
-                } else {
-                    let m3u8 = resolved.m3u8.unwrap_or_default();
-                    let referer = ep.embed.clone();
-                    let out = std::path::Path::new(&out_dir)
-                        .join(&filename)
-                        .to_string_lossy()
-                        .into_owned();
-                    let tx2 = tx.clone();
-                    let ep2 = num.clone();
-                    let res = download(&m3u8, &out, &referer, parallel, move |p: Progress| {
-                        let _ = tx2.send(UiMsg::EpProgress {
-                            ep: ep2.clone(),
-                            done: p.done,
-                            total: p.total,
-                            bytes: p.bytes,
+                let resolved = match nguonc_core::resolve::resolve_one(
+                    &ep,
+                    &movie_url,
+                    &english_title,
+                    &vietnamese_title,
+                    1,
+                )
+                .await
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let _ = tx.send(UiMsg::EpDone {
+                            ep: num,
+                            ok: false,
+                            err: e.to_string(),
                         });
-                    })
-                    .await;
-                    let _ = std::fs::remove_file(&m3u8);
-                    match res {
-                        Ok(()) => {
-                            let _ = tx.send(UiMsg::EpDone {
-                                ep: num,
-                                ok: true,
-                                err: String::new(),
-                            });
+                        if remaining.fetch_sub(1, Ordering::SeqCst) == 1 {
+                            let _ = tx.send(UiMsg::AllDone);
                         }
-                        Err(e) => {
-                            let _ = tx.send(UiMsg::EpDone {
-                                ep: num,
-                                ok: false,
-                                err: e.to_string(),
-                            });
-                        }
+                        return;
+                    }
+                };
+                let m3u8 = resolved.m3u8.clone();
+                let referer = ep.embed.clone();
+                let out = std::path::Path::new(&out_dir)
+                    .join(&filename)
+                    .to_string_lossy()
+                    .into_owned();
+                let tx2 = tx.clone();
+                let ep2 = num.clone();
+                let res = download(&m3u8, &out, &referer, 4, move |p: Progress| {
+                    let _ = tx2.send(UiMsg::EpProgress {
+                        ep: ep2.clone(),
+                        done: p.done,
+                        total: p.total,
+                        bytes: p.bytes,
+                    });
+                })
+                .await;
+                let _ = std::fs::remove_file(&m3u8);
+                match res {
+                    Ok(()) => {
+                        let _ = tx.send(UiMsg::EpDone {
+                            ep: num,
+                            ok: true,
+                            err: String::new(),
+                        });
+                    }
+                    Err(e) => {
+                        let _ = tx.send(UiMsg::EpDone {
+                            ep: num,
+                            ok: false,
+                            err: e.to_string(),
+                        });
                     }
                 }
                 if remaining.fetch_sub(1, Ordering::SeqCst) == 1 {
@@ -483,16 +519,28 @@ impl NguoncApp {
                 if tag.is_empty() {
                     return Err("no tag_name in release payload".to_string());
                 }
-                let tag_num: u32 = tag
-                    .chars()
-                    .filter(|c| c.is_ascii_digit())
-                    .collect::<String>()
-                    .parse()
-                    .unwrap_or(0);
-                if tag_num > BUILD_DATE {
-                    Ok(format!("Update available: {tag}"))
-                } else {
-                    Ok(format!("You are up to date (latest: {tag})"))
+                // Release tags are dates (`YYYY.MM.DD`). Parse the tag as
+                // a date, not by stripping all non-digits — the old code
+                // turned `v1.2.3` into `123` and compared it against a
+                // YYYYMMDD build date. A non-date tag cannot be compared.
+                let tag_num: Option<u32> = {
+                    let parts: Vec<&str> = tag.trim_start_matches('v').split('.').collect();
+                    if parts.len() == 3
+                        && parts
+                            .iter()
+                            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+                    {
+                        parts.concat().parse().ok()
+                    } else {
+                        None
+                    }
+                };
+                match tag_num {
+                    Some(n) if n > BUILD_DATE => Ok(format!("Update available: {tag}")),
+                    Some(_) => Ok(format!("You are up to date (latest: {tag})")),
+                    None => Ok(format!(
+                        "Latest release: {tag} (could not compare its date with this build)"
+                    )),
                 }
             }
             .await;

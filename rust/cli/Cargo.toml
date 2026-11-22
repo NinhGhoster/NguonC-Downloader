@@ -12,3 +12,6 @@ path = "src/main.rs"
 nguonc-core.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
+
+[lints]
+workspace = true

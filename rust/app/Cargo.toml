@@ -9,3 +9,6 @@ nguonc-core.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 eframe = "0.32"
 serde_json.workspace = true
+
+[lints]
+workspace = true

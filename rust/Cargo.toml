@@ -19,3 +19,12 @@ hmac = "0.12"
 aes-gcm = "0.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "process", "sync", "time"] }
 url = "2"
+
+[profile.release]
+lto = "fat"
+strip = true
+codegen-units = 1
+
+[workspace.lints.clippy]
+# Keep the workspace warning-free; `cargo clippy --workspace` enforces it.
+all = "warn"

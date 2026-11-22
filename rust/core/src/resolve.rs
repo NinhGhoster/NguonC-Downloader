@@ -1,60 +1,59 @@
 //! Embed resolution: HTTP/2 bootstrap POST -> AES-GCM envelope -> preissued
 //! playlist -> decrypt `#ENC-AESGCM` m3u8 -> write temp file.
 //! Constants are fixed in the player's public JS (see root AGENTS.md).
+use crate::error::{NguoncError, Result};
 use crate::http;
-use crate::model::{Episode, Resolved};
+use crate::model::{Episode, Resolved, generate_filename};
 use aes_gcm::aead::{Aead, Payload};
 use aes_gcm::{Aes256Gcm, Key, KeyInit, Nonce};
-use anyhow::{Context, Result, bail};
 use hmac::{Hmac, Mac};
 use regex::Regex;
 use sha2::{Digest, Sha256};
+use std::sync::OnceLock;
 
 const BOOTSTRAP_AAD_PREFIX: &str = "stream-bootstrap-v1\n";
 
-pub fn generate_filename(
-    english_title: &str,
-    title: &str,
-    episode_num: &str,
-    season: u32,
-) -> String {
-    let name = if english_title.is_empty() {
-        title
-    } else {
-        english_title
-    };
-    let safe: String = name
-        .chars()
-        .filter(|c| !matches!(c, '\\' | '/' | '*' | '?' | ':' | '"' | '<' | '>' | '|'))
-        .collect();
-    let dotted = safe.split_whitespace().collect::<Vec<_>>().join(".");
-    let ep: u32 = episode_num.parse().unwrap_or(0);
-    format!("{dotted}.S{season:02}E{ep:02}.mp4")
+fn boot_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r#"<script id="stream-bootstrap"[^>]*>(.*?)</script>"#)
+            .expect("bootstrap regex must compile")
+    })
 }
 
-pub async fn resolve_one(ep: &Episode, movie_url: &str, season: u32) -> Resolved {
-    let filename = generate_filename("", "", &ep.name, season); // filled by caller if needed
-    match resolve_inner(ep, movie_url).await {
-        Ok(path) => Resolved {
-            num: ep.name.clone(),
-            embed: ep.embed.clone(),
-            m3u8: Some(path),
-            error: None,
-            filename,
-        },
-        Err(e) => Resolved {
-            num: ep.name.clone(),
-            embed: ep.embed.clone(),
-            m3u8: None,
-            error: Some(format!("{e}")),
-            filename,
-        },
-    }
+fn hash_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"[?&]hash=([0-9a-f]+)").expect("hash regex must compile"))
+}
+
+fn iv_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"iv=([0-9a-fA-F]+)").expect("iv regex must compile"))
+}
+
+/// Resolve one episode to a decrypted local playlist. The filename is
+/// built from the movie's real titles here, not left for the caller.
+pub async fn resolve_one(
+    ep: &Episode,
+    movie_url: &str,
+    english_title: &str,
+    title: &str,
+    season: u32,
+) -> Result<Resolved> {
+    let path = resolve_inner(ep, movie_url).await?;
+    Ok(Resolved {
+        num: ep.name.clone(),
+        embed: ep.embed.clone(),
+        m3u8: path,
+        filename: generate_filename(english_title, title, &ep.name, season),
+    })
 }
 
 async fn resolve_inner(ep: &Episode, movie_url: &str) -> Result<String> {
     if !http::can_h2() {
-        bail!("embed host requires HTTP/2 but no curl with --http2 is available");
+        return Err(NguoncError::Other(
+            "embed host requires HTTP/2 but no curl with --http2 is available".into(),
+        ));
     }
     let embed = &ep.embed;
     let parsed = url::Url::parse(embed)?;
@@ -63,20 +62,23 @@ async fn resolve_inner(ep: &Episode, movie_url: &str) -> Result<String> {
     // VPN round-trips to the VN-only embed host can be slow; 45s leaves
     // headroom over curl's default while still failing fast on a dead link.
     let shell = http::fetch(embed, Some(movie_url), "GET", &[], None, 45).await?;
-    if shell.status != 200 {
-        bail!("HTTP {} from embed host", shell.status);
-    }
+    shell.check_status(embed)?;
     let shell_text = shell.text();
-    let boot_re = Regex::new(r#"<script id="stream-bootstrap"[^>]*>(.*?)</script>"#)?;
-    let boot_json = match boot_re.captures(&shell_text) {
+    let boot_json = match boot_re().captures(&shell_text) {
         Some(c) => c[1].to_string(),
-        None => bail!("stream-bootstrap script missing (legacy data-obf pages not yet ported)"),
+        None => {
+            return Err(NguoncError::parse(
+                "stream-bootstrap script missing (legacy data-obf pages not yet ported)",
+            ));
+        }
     };
     let boot: serde_json::Value = serde_json::from_str(&boot_json)?;
-    let api = boot["api"].as_str().context("bootstrap api missing")?;
+    let api = boot["api"]
+        .as_str()
+        .ok_or_else(|| NguoncError::parse("bootstrap api missing"))?;
     let api_parsed = url::Url::parse(api)?;
     if api_parsed.host_str() != parsed.host_str() {
-        bail!("Invalid bootstrap api URL");
+        return Err(NguoncError::WrongOrigin);
     }
 
     let movie_origin = url::Url::parse(movie_url)
@@ -107,24 +109,18 @@ async fn resolve_inner(ep: &Episode, movie_url: &str) -> Result<String> {
         let retry = resp
             .headers
             .get("retry-after")
-            .map(String::as_str)
-            .unwrap_or("60");
-        bail!("Rate limited by embed host (retry after {retry}s)");
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(60);
+        return Err(NguoncError::RateLimited {
+            retry_after_secs: retry,
+        });
     }
     if resp.status != 200 {
         let detail = serde_json::from_slice::<serde_json::Value>(&resp.body)
             .ok()
             .and_then(|v| v["error"].as_str().map(str::to_string))
             .unwrap_or_default();
-        bail!(
-            "HTTP {} from embed host (bootstrap{})",
-            resp.status,
-            if detail.is_empty() {
-                String::new()
-            } else {
-                format!(": {detail}")
-            }
-        );
+        return Err(NguoncError::from_response(api, resp.status, &resp.body).map_detail(detail));
     }
 
     let envelope: serde_json::Value = serde_json::from_slice(&resp.body)?;
@@ -135,18 +131,16 @@ async fn resolve_inner(ep: &Episode, movie_url: &str) -> Result<String> {
     };
 
     if opened["turnstileEnabled"].as_bool() == Some(true) && opened.get("preissued").is_none() {
-        bail!("Turnstile verification required (no preissued grant)");
+        return Err(NguoncError::Turnstile);
     }
     let playlist_url = opened["preissued"]["playlist"]
         .as_str()
-        .context("Bootstrap response has no preissued playlist")?;
+        .ok_or_else(|| NguoncError::parse("Bootstrap response has no preissued playlist"))?;
     let pl = http::fetch(playlist_url, Some(embed), "GET", &[], None, 45).await?;
-    if pl.status != 200 {
-        bail!("HTTP {} fetching playlist", pl.status);
-    }
+    pl.check_status(playlist_url)?;
     let mut text = pl.text();
     if text.contains("#ENC-AESGCM") {
-        let hash_match = Regex::new(r"[?&]hash=([0-9a-f]+)")?
+        let hash_match = hash_re()
             .captures(embed)
             .map(|c| c[1].to_string())
             .unwrap_or_default();
@@ -159,12 +153,12 @@ async fn resolve_inner(ep: &Episode, movie_url: &str) -> Result<String> {
 fn open_bootstrap(envelope: &serde_json::Value, api_href: &str) -> Result<serde_json::Value> {
     let iv_hex = envelope["iv"]
         .as_str()
-        .context("malformed bootstrap envelope")?;
+        .ok_or_else(|| NguoncError::parse("malformed bootstrap envelope"))?;
     let data_b64 = envelope["data"]
         .as_str()
-        .context("malformed bootstrap envelope")?;
+        .ok_or_else(|| NguoncError::parse("malformed bootstrap envelope"))?;
     if iv_hex.len() != 24 || !iv_hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        bail!("malformed bootstrap envelope iv");
+        return Err(NguoncError::parse("malformed bootstrap envelope iv"));
     }
     let aad = format!("{BOOTSTRAP_AAD_PREFIX}{api_href}");
     let key = Sha256::digest(aad.as_bytes());
@@ -180,36 +174,40 @@ fn open_bootstrap(envelope: &serde_json::Value, api_href: &str) -> Result<serde_
                 aad: aad.as_bytes(),
             },
         )
-        .map_err(|_| anyhow::anyhow!("bootstrap decrypt failed"))?;
+        .map_err(|_| NguoncError::parse("bootstrap decrypt failed"))?;
     Ok(serde_json::from_slice(&pt)?)
 }
 
 /// Playlist key: HMAC-SHA256(key=b"stream-derive-v1", msg=videoHash); no AAD.
 fn decrypt_playlist(text: &str, video_hash: &str) -> Result<String> {
-    let iv_re = Regex::new(r"iv=([0-9a-fA-F]+)")?;
     let mut iv_hex = None;
     let mut data_line = None;
     for line in text.lines() {
         if line.contains("#ENC-AESGCM") {
-            if let Some(c) = iv_re.captures(line) {
+            if let Some(c) = iv_re().captures(line) {
                 iv_hex = Some(c[1].to_string());
             }
         } else if !line.starts_with('#') && !line.trim().is_empty() {
             data_line = Some(line.trim().to_string());
         }
     }
-    let iv_hex = iv_hex.context("Could not parse encrypted m3u8")?;
-    let data_line = data_line.context("Could not parse encrypted m3u8")?;
+    let iv_hex = iv_hex.ok_or_else(|| NguoncError::parse("Could not parse encrypted m3u8"))?;
+    let data_line =
+        data_line.ok_or_else(|| NguoncError::parse("Could not parse encrypted m3u8"))?;
     let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(b"stream-derive-v1")?;
     mac.update(video_hash.as_bytes());
     let key = mac.finalize().into_bytes();
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
+    let iv = hex_decode(&iv_hex)?;
+    if iv.len() != 12 {
+        return Err(NguoncError::parse("Could not parse encrypted m3u8"));
+    }
     let pt = cipher
         .decrypt(
-            Nonce::from_slice(&hex_decode(&iv_hex)?),
+            Nonce::from_slice(&iv),
             base64_decode(&data_line)?.as_slice(),
         )
-        .map_err(|_| anyhow::anyhow!("playlist decrypt failed"))?;
+        .map_err(|_| NguoncError::parse("playlist decrypt failed"))?;
     Ok(String::from_utf8(pt)?)
 }
 
@@ -227,12 +225,13 @@ fn write_playlist(text: &str) -> Result<String> {
 
 fn hex_decode(s: &str) -> Result<Vec<u8>> {
     if !s.len().is_multiple_of(2) {
-        bail!("odd hex length")
+        return Err(NguoncError::parse("odd hex length"));
     }
-    Ok((0..s.len())
+    (0..s.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(&s[i..i + 2], 16))
-        .collect::<Result<Vec<_>, _>>()?)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| NguoncError::parse(format!("invalid hex: {e}")))
 }
 
 fn base64_decode(s: &str) -> Result<Vec<u8>> {

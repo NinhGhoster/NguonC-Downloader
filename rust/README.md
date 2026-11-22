@@ -47,9 +47,24 @@ date against the latest GitHub release tag (`YYYY.MM.DD`) and shows a modal
 with a link to the releases page.
 
 Verify a change: `cargo fmt && cargo clippy --workspace --all-targets &&
-cargo build --release --workspace` (no test suite; scrape via the CLI works
-without VPN, resolve/download need it). The GUI binary users run is
-`target/release/nguonc-app` — always rebuild `--release`.
+cargo test --workspace && cargo build --release --workspace` (scrape via
+the CLI works without VPN, resolve/download need it). The GUI binary users
+run is `target/release/nguonc-app` — always rebuild `--release`.
+
+Design notes (refactored 2026-11-22):
+- Errors are typed (`core::NguoncError`): a Cloudflare 403 is reported as
+  a block ("this IP is blocked, not the movie"), rate limits carry their
+  retry delay, and a failed scrape keeps the real cause instead of the
+  old generic "Could not find episode data on page".
+- Downloads stream to disk in playlist order — peak memory is bounded by
+  in-flight segments, not the whole movie — and an output under 1 KB is
+  treated as a failed download (same rule as the Python engine).
+- The "Concurrent episodes" slider bounds *episodes* in the GUI (segment
+  parallelism inside one episode is fixed at 4); failed episodes can be
+  retried without reloading the movie.
+- Tests: `cargo test -p nguonc-core` (unit tests for filenames, episode
+  parsing, header parsing; integration test for ordered streaming
+  download against a local HTTP server).
 
 Be Vietnam Pro is embedded (`app/assets/BeVietnamPro-Regular.ttf`) so
 Vietnamese diacritics in movie titles render correctly.
