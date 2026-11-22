@@ -66,6 +66,29 @@ Design notes (refactored 2026-11-22):
   parsing, header parsing; integration test for ordered streaming
   download against a local HTTP server).
 
+UI polish (2026-11-22, `app/src/main.rs` only):
+- The Load Movie button is sized to the URL field's *measured* height
+  (`resp.rect.height()`), not a hardcoded number — the field's height
+  comes from font metrics and display scaling, so a guess can still end
+  up a few points off. Button is 100pt wide, regular weight.
+- All three scroll areas (main column, episode list, terminal) use
+  `scroll_bar_visibility(AlwaysVisible)`: with egui's default
+  `VisibleWhenNeeded` the bar fades in on top of the content and the
+  layout jumps; `AlwaysVisible` reserves the bar's width in the layout.
+- Header buttons are both explicitly 13pt: a plain-string button
+  defaults to egui's 12.5pt `TextStyle::Button`, while Theme was
+  explicitly 14pt, so they rendered at different sizes.
+- The loading spinner lives in the status row, in front of the status
+  text, replacing the coloured dot while a load is in progress — it used
+  to sit in the URL row between the field and the button, squeezing the
+  row while loading.
+
+Release 2026.11.22 (`BUILD_DATE` 20261122): the refactor above, the UI
+polish above, and the release profile (`lto = "fat"`, `strip`, workspace
+clippy lints). The release tag is what the GUI's Check for Update
+compares against; the release itself is built by `.github/workflows/build.yml`
+(Python app artifacts — there is no Rust job in CI yet).
+
 Be Vietnam Pro is embedded (`app/assets/BeVietnamPro-Regular.ttf`) so
 Vietnamese diacritics in movie titles render correctly.
 
@@ -92,6 +115,6 @@ host mean the VPN is off or slow: bootstrap requests allow 45 s and report
   and concatenated directly (sidesteps issue #2's failure class).
 - Temp `.m3u8` playlists are deleted after each download (Python leaves them
   in `$TMPDIR`).
-- Single binaries: `nguonc` ~3.7 MB, `nguonc-app` ~8.9 MB (vs. 46–135 MB Python bundles).
+- Single binaries: `nguonc` ~2.6 MB, `nguonc-app` ~12 MB (vs. 46–135 MB Python bundles; measured from release builds 2026-11-22 — LTO did not shrink the GUI binary).
 - Embed host still requires HTTP/2 + `Origin`/`Referer`; CDN segment 403s
   are network/VPN issues, not code (curl works where Python clients get 403).

@@ -16,7 +16,7 @@ const GITHUB_API_LATEST: &str =
 const RELEASES_URL: &str = "https://github.com/NinhGhoster/NguonC-Downloader/releases";
 /// Build date of this brand (YYYYMMDDHHMM as yyyymmdd). Compared against the
 /// YYYY.MM.DD tag of the latest GitHub release for the update check.
-const BUILD_DATE: u32 = 20261118;
+const BUILD_DATE: u32 = 20261122;
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 enum ThemeMode {
@@ -656,7 +656,12 @@ impl eframe::App for NguoncApp {
             .show(ctx, |ui| {
                 // The whole column scrolls vertically: content is taller than the
                 // window at small sizes, and widgets must never be clipped away.
+                // AlwaysVisible reserves the bar's width in the layout, so the
+                // bar never floats over the content or makes it jump when it
+                // fades in (the default VisibleWhenNeeded animates the bar in
+                // on top of whatever is underneath it).
                 egui::ScrollArea::vertical()
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing = egui::vec2(12.0, 10.0);
@@ -696,7 +701,11 @@ impl eframe::App for NguoncApp {
                                                 egui::RichText::new(format!(
                                                     "Theme: {theme_label}"
                                                 ))
-                                                .size(14.0),
+                                                // Same size as Check for Update below: the
+                                                // plain-string button defaults to 12.5pt
+                                                // (egui's TextStyle::Button), so an explicit
+                                                // size is needed on both or they mismatch.
+                                                .size(13.0),
                                             ),
                                         )
                                         .on_hover_text("Click to cycle: System / Dark / Light")
@@ -709,7 +718,9 @@ impl eframe::App for NguoncApp {
                                     if ui
                                         .add_sized(
                                             [130.0, 30.0],
-                                            egui::Button::new("Check for Update"),
+                                            egui::Button::new(
+                                                egui::RichText::new("Check for Update").size(13.0),
+                                            ),
                                         )
                                         .clicked()
                                     {
@@ -732,7 +743,7 @@ impl eframe::App for NguoncApp {
                         // content wider than the panel (which then grows/clips), and an
                         // RTL layout places the edit's far edge off-panel.
                         ui.horizontal(|ui| {
-                            let btn_w = 120.0;
+                            let btn_w = 100.0;
                             let edit_w =
                                 (ui.available_width() - btn_w - ui.spacing().item_spacing.x)
                                     .max(100.0);
@@ -741,14 +752,20 @@ impl eframe::App for NguoncApp {
                                     .hint_text("https://phim.nguonc.com/phim/...")
                                     .desired_width(edit_w),
                             );
-                            if self.loading {
-                                ui.spinner();
-                            }
+                            // Size the button to the field's *measured* height: the
+                            // TextEdit is one font row plus frame margins, so its
+                            // real height depends on font metrics and display
+                            // scaling — a hardcoded number is only a guess and
+                            // can still end up a few points off.
+                            let btn_h = resp.rect.height();
                             if ui
                                 .add_enabled(
                                     !self.loading && !self.downloading,
-                                    egui::Button::new(egui::RichText::new("Load Movie").strong())
-                                        .min_size(egui::vec2(120.0, 32.0)),
+                                    // Regular weight, narrower than before: the old
+                                    // 120x32 bold button looked like a big grey slab
+                                    // next to the thin text field.
+                                    egui::Button::new(egui::RichText::new("Load Movie").size(13.0))
+                                        .min_size(egui::vec2(100.0, btn_h)),
                                 )
                                 .clicked()
                                 || (resp.lost_focus()
@@ -761,10 +778,20 @@ impl eframe::App for NguoncApp {
                         // ── Status line ───────────────────────────────────────────
                         let sc = if self.status_red { red } else { green };
                         ui.horizontal(|ui| {
-                            // Painted dot: guaranteed to render regardless of font coverage.
-                            let (rect, _resp) = ui
-                                .allocate_exact_size(egui::vec2(12.0, 16.0), egui::Sense::hover());
-                            ui.painter().circle_filled(rect.center(), 4.5, sc);
+                            if self.loading {
+                                // The spinner lives here now, in front of the
+                                // status text — it used to sit in the URL row
+                                // between the field and the Load Movie button,
+                                // where it squeezed the row while loading.
+                                ui.spinner();
+                            } else {
+                                // Painted dot: guaranteed to render regardless of font coverage.
+                                let (rect, _resp) = ui.allocate_exact_size(
+                                    egui::vec2(12.0, 16.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().circle_filled(rect.center(), 4.5, sc);
+                            }
                             ui.add(egui::Label::new(
                                 egui::RichText::new(&self.status).size(13.0).color(sc),
                             ));
@@ -902,6 +929,9 @@ impl eframe::App for NguoncApp {
                                 .corner_radius(10.0)
                                 .show(ui, |ui| {
                                     egui::ScrollArea::vertical()
+                                        .scroll_bar_visibility(
+                                            egui::scroll_area::ScrollBarVisibility::AlwaysVisible,
+                                        )
                                         .max_height(150.0)
                                         .id_salt("episodes")
                                         .show(ui, |ui| {
@@ -1105,6 +1135,9 @@ impl eframe::App for NguoncApp {
                             .stroke(egui::Stroke::new(1.0_f32, muted.gamma_multiply(0.3)))
                             .show(ui, |ui| {
                                 egui::ScrollArea::vertical()
+                                    .scroll_bar_visibility(
+                                        egui::scroll_area::ScrollBarVisibility::AlwaysVisible,
+                                    )
                                     .max_height(160.0)
                                     .min_scrolled_height(70.0)
                                     .stick_to_bottom(true)

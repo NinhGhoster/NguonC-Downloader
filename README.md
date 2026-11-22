@@ -70,7 +70,7 @@ xvfb-run uv run flet pack nguonc_app.py --name "NguonC Downloader"
 
 ## Rust version (branch `rust`)
 
-A native Rust port lives in [`rust/`](rust/) on the `rust` branch — same engine protocol, no Python/yt-dlp/ffmpeg at all (HTTP/2 via system `curl`, segments concatenated directly). Single ~9 MB binary vs 46–135 MB Python bundles.
+A native Rust port lives in [`rust/`](rust/) on the `rust` branch — same engine protocol, no Python/yt-dlp/ffmpeg at all (HTTP/2 via system `curl`, segments concatenated directly). Single ~12 MB binary vs 46–135 MB Python bundles.
 
 ```bash
 git checkout rust
@@ -80,7 +80,7 @@ cargo build --release --workspace
 ./target/release/nguonc scrape <movie-url>   # CLI (scrape works without VPN)
 ```
 
-See [`rust/README.md`](rust/README.md) for details. Resolve/download require a Vietnam IP (VPN); the embed host is VN-only. The Python app on `main` remains the shipped release until the Rust brand is verified.
+See [`rust/README.md`](rust/README.md) for details. Resolve/download require a Vietnam IP (VPN); the embed host is VN-only. The Python app on `main` remains the shipped release; the Rust brand was verified loading on macOS 2026-11-22 and is released as 2026.11.22 (see `rust/README.md`).
 
 ## Project Structure
 
